@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["Marcus Ewert <marcus.ewert@mixpanel.com>"]
 edition = "2018"
 
+[dependencies]
+libc = "0.2"
+rand = "0.6"
+
 [dev-dependencies]
 serde_json = "1.0"
 hamcrest2 = "0.2.3"
+os_pipe = "0.8.0"
+matches = "0.1.8"
