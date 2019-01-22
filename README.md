@@ -2,6 +2,11 @@
 
 A Rust implementation of a JSON Tokenizer.
 
+## Warning
+
+This crate is still very unstable, and probably going to have many breaking
+changes while in the 0.x.y versions.
+
 ## Motivation
 
 Streaming tokenization for handling large JSON payloads which can be processed

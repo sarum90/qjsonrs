@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Marcus Ewert <marcus.ewert@mixpanel.com>"]
 license = "MIT"
 edition = "2018"
+description = "Streaming JSON Tokenizer."
+repository = "https://github.com/sarum90/qjsonrs"
 
 [dependencies]
 libc = "0.2"
