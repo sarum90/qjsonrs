@@ -1,3 +1,85 @@
+#![deny(missing_docs)]
+//! # qjsonrs
+//!
+//! A quick JSON tokenizer.
+//!
+//! This crate is intended to be used to quickly tokenize a stream of JSON data. It merely emits
+//! tokens, it does not parse the JSON into larger structures.
+//!
+//! This is useful for extracting data from massive arrays, or quick parsing of JSON objects where
+//! you only care about certain keys.
+//!
+//! # Examples:
+//! ## Simple usage:
+//! ```
+//! use qjsonrs::{
+//!     JsonStream,
+//!     JsonToken::{
+//!         StartObject,
+//!         EndObject,
+//!         StartArray,
+//!         EndArray,
+//!         JsKey,
+//!         JsNumber
+//!     },
+//!     JsonTokenIterator
+//! };
+//!
+//! # fn main() -> Result<(), qjsonrs::Error> {
+//! let mut stream = JsonStream::from_read(&b"{\"test\": 1, \"arr\": []}"[..], 256)?;
+//! assert_eq!(stream.next()?.unwrap(), StartObject);
+//! assert_eq!(stream.next()?.unwrap(), JsKey("test".into()));
+//! assert_eq!(stream.next()?.unwrap(), JsNumber("1"));
+//! assert_eq!(stream.next()?.unwrap(), JsKey("arr".into()));
+//! assert_eq!(stream.next()?.unwrap(), StartArray);
+//! assert_eq!(stream.next()?.unwrap(), EndArray);
+//! assert_eq!(stream.next()?.unwrap(), EndObject);
+//! assert_eq!(stream.next()?, None);
+//! # Ok(())
+//! # }
+//! ```
+//! ## Count size of JSON array:
+//! ```
+//! # use qjsonrs::{
+//! #     Error,
+//! #     JsonStream,
+//! #     JsonToken::{
+//! #         StartObject,
+//! #         EndObject,
+//! #         StartArray,
+//! #         EndArray,
+//! #         JsKey,
+//! #         JsNumber
+//! #     },
+//! #     JsonTokenIterator
+//! # };
+//! #
+//! # use std::io::Read;
+//! #
+//! fn array_size(stream: &mut JsonTokenIterator) -> Result<usize, Error> {
+//!     assert_eq!(stream.next()?.unwrap(), StartArray);
+//!     let mut size = 0;
+//!     let mut depth = 0;
+//!     loop {
+//!         match stream.next()? {
+//!             Some(StartObject) => { if depth == 0 {size += 1;} depth += 1; },
+//!             Some(EndObject) => { assert!(depth > 0); depth -= 1; },
+//!             Some(StartArray) => { if depth == 0 {size += 1;} depth += 1; },
+//!             Some(EndArray) => { if depth == 0 {break;} else { depth -= 1; } },
+//!             Some(_) => { if depth == 0 {size += 1; } },
+//!             None => { panic!("Early termination"); },
+//!         }
+//!     }
+//!     Ok(size)
+//! }
+//!
+//! # fn main() -> Result<(), qjsonrs::Error> {
+//! let mut stream = JsonStream::from_read(&b"[1, [2], 3, {\"a\": [4]}, 5, 6]"[..], 256)?;
+//! assert_eq!(array_size(&mut stream)?, 6);
+//! assert_eq!(stream.next()?, None);
+//! # Ok(())
+//! # }
+//!
 
 #[cfg(test)] #[macro_use] extern crate hamcrest2;
 #[cfg(test)] #[macro_use] extern crate matches;
@@ -34,6 +116,10 @@ enum ParseContext {
     Object,
 }
 
+/// A stream of JSON tokens.
+///
+/// Implements an interface similar to Iter. However, the objects returned by next() contain
+/// references to an internal buffer.
 pub struct JsonStream<R> where R: Read {
     buffer: Buffer<R>,
 
@@ -41,9 +127,29 @@ pub struct JsonStream<R> where R: Read {
     parsed: Option<ParsedState>,
 }
 
+
+/// Trait for an iterator over JsonTokens.
+pub trait JsonTokenIterator {
+    /// Advance to the next token.
+    fn advance(&mut self) -> Result<()>;
+
+    /// Get the current token, or None if the stream is exhausted.
+    fn get<'a>(&'a self) -> Option<JsonToken<'a>>;
+
+    /// Advance to the next token, then get the current token.
+    ///
+    ///
+    /// Implemented as a call to `advance()` and then `get()`
+    fn next<'a>(&'a mut self) -> Result<Option<JsonToken<'a>>> {
+        self.advance()?;
+        Ok(self.get())
+    }
+}
+
+/// A raw JSON string (with escapes).
 #[derive(Debug, PartialEq)]
 pub struct JsonString<'a> {
-    pub raw: &'a str,
+    raw: &'a str,
 }
 
 impl<'a> From<&'a str> for JsonString<'a> {
@@ -98,31 +204,41 @@ impl Into<String> for JsonString<'_> {
     }
 }
 
+/// A token from a stream of JSON.
 #[derive(Debug, PartialEq)]
 pub enum JsonToken<'a> {
+    /// The start of an object, a.k.a. '{'
     StartObject,
+    /// The end of an object, a.k.a. '}'
     EndObject,
+    /// The start of an array, a.k.a. '['
     StartArray,
+    /// The end of an object, a.k.a. ']'
     EndArray,
+    /// The token 'null'
     JsNull,
+    /// Either 'true' or 'false'
     JsBoolean(bool),
+    /// A number, unparsed. i.e. '-123.456e-789'
     JsNumber(&'a str),
+    /// A JSON string in a value context.
     JsString(JsonString<'a>),
+    /// A JSON string in the context of a key in a JSON object.
     JsKey(JsonString<'a>),
 }
 
-#[derive(Debug)]
-pub struct ParseError {
-}
-
+/// The error type for this crate.
 #[derive(Debug)]
 pub enum Error {
+    /// An Io error from the underlying Read object.
     Io(std::io::Error),
-    Parse(ParseError),
-    Unimplemented(&'static str),
+    /// An invalid or out of context JSON character.
     UnexpectedChar(char),
+    /// A JSON number or string is larger than the internal buffer.
     BufferOutOfSpace,
+    /// Invalid Utf-8 input from the Read object.
     InvalidUnicode,
+    /// Early termination (leaving invalid JSON input).
     UnexpectedEOF,
 }
 
@@ -143,6 +259,7 @@ impl From<buffer::Error> for Error {
     }
 }
 
+/// The Result type for this crate.
 type Result<T> = std::result::Result<T, Error>;
 
 struct JsonStreamIter<'a, S> where S: Read {
@@ -274,16 +391,36 @@ impl<'a, S> JsonStreamIter<'a, S>  where S: Read {
 }
 
 impl<R> JsonStream<R> where R: Read {
-    pub fn from_read(r: R) -> Result<JsonStream<R>> {
+    /// Constructs a JsonStream from an object that implements `io::Read`
+    ///
+    /// # Params:
+    ///
+    /// r: The reader to read from
+    /// buffer_min_size: The minimum size of the internal buffer to read into. N.B. Must be larger
+    ///                  than the largest JSON string or JSON number in the payload.
+    ///
+    pub fn from_read(r: R, buffer_min_size: usize) -> Result<JsonStream<R>> {
+        let bsize = if buffer_min_size == 0 {
+            1
+        } else {
+            buffer_min_size
+        };
         Ok(
             JsonStream::<R> {
-                buffer: Buffer::new(4096, r)?,
+                buffer: Buffer::new(bsize, r)?,
                 context_stack: vec![ParseContext::Base],
                 parsed: None,
             }
         )
     }
 
+    /// The size of the internal buffer.
+    ///
+    /// Due to implementation details, can be larger than the buffer_min_size handed in in the
+    /// constructor.
+    ///
+    /// JSON strings or numbers larger than this size in the input will cause a BufferOutOfSpace
+    /// error.
     pub fn buffer_size(&self) -> usize {
         self.buffer.size()
     }
@@ -408,8 +545,10 @@ impl<R> JsonStream<R> where R: Read {
             Some(c) => Err(Error::UnexpectedChar(c)),
         }
     }
+}
 
-    pub fn advance(&mut self) -> Result<()> {
+impl<R: Read> JsonTokenIterator for JsonStream<R> {
+    fn advance(&mut self) -> Result<()> {
         // First, consume the previous result:
         match self.parsed {
             // String plus trailing '"':
@@ -548,7 +687,7 @@ impl<R> JsonStream<R> where R: Read {
         Ok(())
     }
 
-    pub fn get<'a>(&'a self) -> Option<JsonToken<'a>> {
+    fn get<'a>(&'a self) -> Option<JsonToken<'a>> {
         match self.parsed {
             Some(ParsedState::StartObject) =>
                 Some(JsonToken::StartObject),
@@ -571,17 +710,12 @@ impl<R> JsonStream<R> where R: Read {
             None => None
         }
     }
-
-    pub fn next<'a>(&'a mut self) -> Result<Option<JsonToken<'a>>> {
-        self.advance()?;
-        Ok(self.get())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use hamcrest2::prelude::*;
-    use super::{JsonStream, JsonToken};
+    use super::{JsonStream, JsonToken, JsonTokenIterator};
     use serde_json::{Value, Map, Number};
     use std::io::Read;
     use std::str::FromStr;
@@ -659,7 +793,7 @@ mod tests {
 
     fn compare_serde_with_qjsonrs(input: &str) {
         println!("Running input {:?}", input);
-        let mut stream = JsonStream::from_read(input.as_bytes()).unwrap();
+        let mut stream = JsonStream::from_read(input.as_bytes(), 256).unwrap();
         match Value::from_str(input).map(normalize_value) {
             Ok(serde) => {
                 let qjsonrs = normalize_value(consume_value(&mut stream));
@@ -677,7 +811,7 @@ mod tests {
 
     #[test]
     fn simple_string() {
-        let mut stream = JsonStream::from_read(&b"\"my string\""[..]).unwrap();
+        let mut stream = JsonStream::from_read(&b"\"my string\""[..], 256).unwrap();
         assert_that!(stream.next().unwrap().unwrap(), eq(JsonToken::JsString("my string".into())));
         assert_that!(stream.next().unwrap(), none());
     }
@@ -701,7 +835,7 @@ mod tests {
     #[test]
     fn string_spanning_buffers() {
         let size = {
-            let stream = JsonStream::from_read(&b"\"my string\""[..]).unwrap();
+            let stream = JsonStream::from_read(&b"\"my string\""[..], 256).unwrap();
             stream.buffer_size()
         };
         let s = (0..size-3).map(|_| ' ').collect::<String>();
