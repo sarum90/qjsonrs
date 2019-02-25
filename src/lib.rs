@@ -88,13 +88,17 @@
 extern crate libc;
 extern crate rand;
 
-mod ring;
 mod buffer;
+mod decode;
+mod ring;
+mod token;
 
 use crate::buffer::Buffer;
 
 use std::io::Read;
 use std::str;
+
+pub use crate::token::{JsonString, JsonToken};
 
 #[derive(Clone)]
 enum ParsedState {
@@ -144,87 +148,6 @@ pub trait JsonTokenIterator {
         self.advance()?;
         Ok(self.get())
     }
-}
-
-/// A raw JSON string (with escapes).
-#[derive(Debug, PartialEq)]
-pub struct JsonString<'a> {
-    raw: &'a str,
-}
-
-impl<'a> From<&'a str> for JsonString<'a> {
-    fn from(s: &'a str) -> JsonString<'a> {
-        JsonString{
-            raw: s
-        }
-    }
-}
-
-unsafe fn unescape(s: &str) -> String {
-    let mut res = String::with_capacity(s.len());
-    let mut chs = s.chars();
-    while let Some(c) = chs.next() {
-        if c == '\\' {
-            let c = chs.next().expect("unescape off end of string.");
-            res.push(match c {
-                'u' => {
-                    let a = chs.next().expect("unescape unicode off end of string.");
-                    let b = chs.next().expect("unescape unicode off end of string.");
-                    let c = chs.next().expect("unescape unicode off end of string.");
-                    let d = chs.next().expect("unescape unicode off end of string.");
-                    std::char::from_u32(
-                        ((a.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
-                        ((b.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 8) +
-                        ((c.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 4) +
-                        (d.to_digit(16).expect("Bad hex digit in \\u escape") as u32)
-                    ).expect("")
-                },
-                '"' => '"',
-                'n' => '\n',
-                '\\' => '\\',
-                '/' => '/',
-                'b' => '\x08',
-                'r' => '\r',
-                't' => '\t',
-                unk => panic!("Unhandled escape {:?}", unk),
-            })
-        } else {
-            res.push(c);
-        }
-    };
-    res
-}
-
-impl Into<String> for JsonString<'_> {
-    fn into(self) -> String {
-        // self.raw must be a valid set of escaped JSON string utf-8 bytes.
-        unsafe {
-            unescape(self.raw.into())
-        }
-    }
-}
-
-/// A token from a stream of JSON.
-#[derive(Debug, PartialEq)]
-pub enum JsonToken<'a> {
-    /// The start of an object, a.k.a. '{'
-    StartObject,
-    /// The end of an object, a.k.a. '}'
-    EndObject,
-    /// The start of an array, a.k.a. '['
-    StartArray,
-    /// The end of an object, a.k.a. ']'
-    EndArray,
-    /// The token 'null'
-    JsNull,
-    /// Either 'true' or 'false'
-    JsBoolean(bool),
-    /// A number, unparsed. i.e. '-123.456e-789'
-    JsNumber(&'a str),
-    /// A JSON string in a value context.
-    JsString(JsonString<'a>),
-    /// A JSON string in the context of a key in a JSON object.
-    JsKey(JsonString<'a>),
 }
 
 /// The error type for this crate.
@@ -292,18 +215,39 @@ impl<'a, S> JsonStreamIter<'a, S>  where S: Read {
     }
 
     fn js_string(mut self) -> Result<usize> {
-        let (mut pos, mut c) = self.next()?.unwrap();
+        let (mut pos, mut c) = self.next()?.ok_or(Error::UnexpectedEOF)?;
         loop {
             match c {
+                c @ '\x00' ... '\x1f' => {return Err(Error::UnexpectedChar(c));},
                 '"' => {break;},
                 '\\' => {
-                    self.next()?.unwrap(); // consume the next escaped char.
-                    let (p, nc) = self.next()?.unwrap();
+                    // Check escape char:
+                    let (_, e) = self.next()?.ok_or(Error::UnexpectedEOF)?;
+                    match e {
+                        // Valid simple escape:
+                        '"' | '\\' | '/' | 'b' | 'n' | 'r' | 't' => {},
+                        // Unicode escape:
+                        'u' => {
+                            // 4 hex digits:
+                            for _ in 0..4 {
+                                let (_, h) = self.next()?.ok_or(Error::UnexpectedEOF)?;
+                                match h {
+                                    '0' ... '9' | 'a' ... 'f' | 'A' ... 'F' => {},
+                                    c => {return Err(Error::UnexpectedChar(c))},
+                                }
+                            }
+                        },
+                        // Invalid escape:
+                        c => {return Err(Error::UnexpectedChar(c))},
+                    }
+
+                    // Advance past the escape
+                    let (p, nc) = self.next()?.ok_or(Error::UnexpectedEOF)?;
                     pos = p;
                     c = nc;
                 },
                 _ => {
-                    let (p, nc) = self.next()?.unwrap();
+                    let (p, nc) = self.next()?.ok_or(Error::UnexpectedEOF)?;
                     pos = p;
                     c = nc;
                 },
@@ -830,6 +774,17 @@ mod tests {
         compare_serde_with_qjsonrs("\"my \\t string\"");
         compare_serde_with_qjsonrs("\"my \\u0022 string\"");
         compare_serde_with_qjsonrs("\"my \\u263A smiley\"");
+        compare_serde_with_qjsonrs("\"\\u0000\"");
+    }
+
+    #[test]
+    fn bad_string() {
+        compare_serde_with_qjsonrs("\"");
+        compare_serde_with_qjsonrs("\"\\");
+        compare_serde_with_qjsonrs("\"\\I\"");
+        compare_serde_with_qjsonrs("\"\\u");
+        compare_serde_with_qjsonrs("\"my\nstring\"");
+        compare_serde_with_qjsonrs("\"my\\uaaaP\"");
     }
 
     #[test]
