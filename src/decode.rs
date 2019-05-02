@@ -10,10 +10,13 @@ enum Context {
     Object,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum TokenType {
     ArrayStart,
+    ArrayComma,
     ObjectStart,
+    ObjectColon,
+    ObjectComma,
     Key,
     Value,
 }
@@ -85,7 +88,7 @@ impl NumberLength {
 
 pub type DecodeResult<'a> = Result<Token<'a>, DecodeError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ConsumableBytes<'a> {
     bytes: &'a [u8]
 }
@@ -303,12 +306,14 @@ impl JsonDecoder {
         // TODO: consider using from_utf8_unchecked, we will already have validated that the stream
         // is valid ascii at this point.
         let res = str::from_utf8(&bytes.bytes[..n])?;
-        bytes.consume_bytes(n);
         match nl {
             NumberLength::Terminated(_) => {
+                bytes.consume_bytes(n);
                 Ok(Token::Terminated(JsonToken::JsNumber(res)))
             },
             NumberLength::Unterminated(_) => {
+                // Unterminted tokens should not be consumed. Caller should either use the value
+                // and never call decode again, or call decode again with more data.
                 Ok(Token::Unterminated(JsonToken::JsNumber(res)))
             },
         }
@@ -417,15 +422,32 @@ impl JsonDecoder {
     pub fn decode<'a>(&mut self, bytes: &mut ConsumableBytes<'a>) -> DecodeResult<'a> {
         bytes.consume_ws();
         match (self.stack.last(), &self.previous) {
+            (Some(Context::Object), TokenType::ObjectComma) => {
+                match bytes.next()  {
+                    Some(b'"') => {
+                        let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                        self.previous = TokenType::Key;
+                        return res;
+                    },
+                    Some(c) => {
+                        return Err(DecodeError::UnexpectedByte(c));
+                    },
+                    None => {
+                        return Err(DecodeError::NeedsMore);
+                    },
+                }
+            },
             (Some(Context::Object), TokenType::Value) => {
                 match bytes.next() {
                     Some(b',') => {
                         bytes.consume_bytes(1);
+                        self.previous = TokenType::ObjectComma;
                         bytes.consume_ws();
                         match bytes.next()  {
                             Some(b'"') => {
+                                let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
                                 self.previous = TokenType::Key;
-                                return Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                                return res;
                             },
                             Some(c) => {
                                 return Err(DecodeError::UnexpectedByte(c));
@@ -452,8 +474,9 @@ impl JsonDecoder {
             (Some(Context::Object), TokenType::ObjectStart) => {
                 match bytes.next() {
                     Some(b'"') => {
+                        let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
                         self.previous = TokenType::Key;
-                        return Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                        return res;
                     },
                     Some(b'}') => {
                         bytes.consume_bytes(1);
@@ -473,6 +496,7 @@ impl JsonDecoder {
                 match bytes.next() {
                     Some(b':') => {
                         bytes.consume_bytes(1);
+                        self.previous = TokenType::ObjectColon;
                     },
                     Some(c) => {
                         return Err(DecodeError::UnexpectedByte(c));
@@ -487,6 +511,7 @@ impl JsonDecoder {
                 match bytes.next() {
                     Some(b',') => {
                         bytes.consume_bytes(1);
+                        self.previous = TokenType::ArrayComma;
                     },
                     Some(b']') => {
                         bytes.consume_bytes(1);
@@ -507,6 +532,7 @@ impl JsonDecoder {
         }
 
         let res = self.decode_value(bytes)?;
+        let prev = self.previous;
         self.previous = match res {
             Token::Terminated(JsonToken::StartObject) | Token::Unterminated(JsonToken::StartObject) => {
                 self.stack.push(Context::Object);
@@ -530,7 +556,14 @@ impl JsonDecoder {
                 self.stack.pop();
                 TokenType::Value
             },
-            _ => {
+            Token::Terminated(_) => {
+                TokenType::Value
+            },
+            Token::Unterminated(_) =>  {
+                // Don't update after unterminated tokens
+                prev
+            },
+            Token::EndOfStream =>  {
                 TokenType::Value
             }
         };
@@ -561,12 +594,14 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct SyncConsumableBytes<'a> {
         bytes: &'a [u8],
         start: usize,
         end: usize,
     }
 
+    #[derive(Debug)]
     struct ConsumeableByteAdvance<'a, 'b> {
         source: &'b mut SyncConsumableBytes<'a>,
         bytes: ConsumableBytes<'a>,
@@ -603,17 +638,40 @@ mod tests {
                 end: 0,
             }
         }
+
+        fn next_impl_end(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
+            dbg!(&self);
+            let mut bytes = ConsumeableByteAdvance::new(self);
+            dbg!(&bytes);
+            decoder.decode(bytes.bytes())?.unwrap_or(DecodeError::NeedsMore)
+        }
+
+        fn next_impl(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
+            dbg!(&self);
+            let mut bytes = ConsumeableByteAdvance::new(self);
+            dbg!(&bytes);
+            decoder.decode(bytes.bytes())?.terminated_or(DecodeError::NeedsMore)
+        }
+
+        fn next(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
+            while self.end < self.bytes.len() {
+                match self.next_impl(decoder) {
+                    Err(DecodeError::NeedsMore) => {
+                        self.end += 1;
+                    },
+                    o => {
+                        dbg!(&o);
+                        return o;
+                    },
+                }
+            }
+            self.next_impl_end(decoder)
+        }
     }
 
     fn consume_value_impl2<'a>(decoder: &mut JsonDecoder, scb: &mut SyncConsumableBytes<'a>, last: bool) -> Result<ConsumedValue, DecodeError> {
-        let tok = {
-            let mut bytes = ConsumeableByteAdvance::new(scb);
-            if last {
-                decoder.decode(bytes.bytes())?.unwrap_or(DecodeError::NeedsMore)?
-            } else {
-                decoder.decode(bytes.bytes())?.terminated_or(DecodeError::NeedsMore)?
-            }
-        };
+        dbg!(&scb);
+        let tok = scb.next(decoder)?;
         Ok(match tok {
             JsonToken::JsNull => {ConsumedValue::Value(Value::Null)},
             JsonToken::JsBoolean(b) => {ConsumedValue::Value(Value::Bool(b))},
@@ -645,12 +703,13 @@ mod tests {
                 let mut res = Map::new();
                 loop {
                     {
-                        let mut bytes = ConsumeableByteAdvance::new(scb);
-                        match decoder.decode(bytes.bytes())? {
-                            Token::Terminated(JsonToken::JsKey(k)) => {
-                                res.insert(k.into(), consume_value(decoder, bytes.bytes())?);
+                        // let mut bytes = ConsumeableByteAdvance::new(scb);
+                        //match consume_value_impl2(decoder, scb, last)? {
+                        match scb.next(decoder)? {
+                            JsonToken::JsKey(k) => {
+                                res.insert(k.into(), consume_value_impl2(decoder, scb, last)?.unwrap());//bytes.bytes())?);
                             },
-                            Token::Terminated(JsonToken::EndObject) => {
+                            JsonToken::EndObject => {
                                 break;
                             },
                             t => { panic!("Unexpected token while parsing objects: {:?}", t); }
@@ -735,7 +794,7 @@ mod tests {
         let mut fulldecoder = JsonDecoder::new();
         let qjsonrs = consume_value(&mut fulldecoder, &mut fullbytes).map(normalize_value);
         let in_bytes = input.as_bytes();
-        let mut start = 0;
+        //let mut start = 0;
         let mut decoder = JsonDecoder::new();
         let mut scb = SyncConsumableBytes::new(in_bytes);
         //for end in 0..in_bytes.len() + 1 {
@@ -746,11 +805,11 @@ mod tests {
             println!("Running {:?}", from_utf8(sub_in_bytes).unwrap());
             //match (resp, bytes.len() == in_bytes.len()) {
             match (resp, false) {
-                (Err(DecodeError::NeedsMore), false) => {
-                    println!("Needs more @ {:?}", from_utf8(sub_in_bytes).unwrap());
-                    //println!("end {:?}, len {:?}", end, in_bytes.len());
-                    println!("len {:?}", in_bytes.len());
-                }
+                //(Err(DecodeError::NeedsMore), false) => {
+                //    println!("Needs more @ {:?}", from_utf8(sub_in_bytes).unwrap());
+                //    //println!("end {:?}, len {:?}", end, in_bytes.len());
+                //    println!("len {:?}", in_bytes.len());
+                //}
                 (Err(e), _) => {
                     println!("Got {:?} @ {:?}", e, from_utf8(sub_in_bytes).unwrap());
                     assert_that!(e, eq(qjsonrs.unwrap_err()));
@@ -765,7 +824,7 @@ mod tests {
             // Advance the start of the slice according to how many bytes were consumed:
             //start += sub_in_bytes.len() - bytes.len();
         //}
-        panic!("Should always get a error or value before end of byte stream. bytes: {:?}, expected: {:?}", str::from_utf8(in_bytes).unwrap(), qjsonrs)
+        //panic!("Should always get a error or value before end of byte stream. bytes: {:?}, expected: {:?}", str::from_utf8(in_bytes).unwrap(), qjsonrs)
     }
 
     fn compare_serde_with_qjsonrs_impl(input: &str) -> Option<DecodeError> {
@@ -777,16 +836,20 @@ mod tests {
             Ok(serde) => {
                 let qjsonrs = normalize_value(consume_value(&mut decoder, &mut bytes).expect("Should be successful since serde was successful."));
                 assert_that!(qjsonrs, eq(serde));
-                assert_that!(decoder.decode(&mut bytes).unwrap(), eq(Token::EndOfStream));
+                match decoder.decode(&mut bytes).unwrap() {
+                    Token::Terminated(t) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
+                    _ => {}
+                }
                 None
             },
             Err(_) => {
-                match decoder.decode(&mut bytes) {
+                //Some(consume_value(&mut decoder, &mut bytes).expect_err("Expected to hit an err case, given serde error in serde parsing."))
+                match consume_value(&mut decoder, &mut bytes) {
                     Err(e) => {
                         Some(e)
                     },
                     _  => {
-                        Some(decoder.decode(&mut bytes).expect_err("Expected to hit an err case, given serde error in serde parsing."))
+                        Some(consume_value(&mut decoder, &mut bytes).expect_err("Expected to hit an err case, given serde error in serde parsing."))
                     }
                 }
             },
@@ -901,6 +964,9 @@ mod tests {
         compare_serde_with_qjsonrs("[null, 1 , true]");
         compare_serde_with_qjsonrs("[[null], [], 1, [[[]], true]]");
         compare_serde_with_qjsonrs("[[null], [], 1, [ [ []], true]]");
+        compare_serde_with_qjsonrs_err("[,]", DecodeError::UnexpectedByte(b','));
+        compare_serde_with_qjsonrs_err("[1,,2]", DecodeError::UnexpectedByte(b','));
+        compare_serde_with_qjsonrs_err("[1,2,]", DecodeError::UnexpectedByte(b']'));
     }
 
     #[test]
