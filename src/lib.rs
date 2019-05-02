@@ -99,6 +99,7 @@ use std::io::Read;
 use std::str;
 
 pub use crate::token::{JsonString, JsonToken};
+pub use crate::decode::JsonDecoder;
 
 #[derive(Clone)]
 enum ParsedState {

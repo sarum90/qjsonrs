@@ -5,8 +5,24 @@ pub struct JsonString<'a> {
     raw: &'a str,
 }
 
+// TODO: kill this.
 impl<'a> From<&'a str> for JsonString<'a> {
     fn from(s: &'a str) -> JsonString<'a> {
+        JsonString{
+            raw: s
+        }
+    }
+}
+
+impl<'a> JsonString<'a> {
+
+    // TODO: expose a safe version that errors out if str is an invalid json string (bad escape
+    // code, newlines, NULL).
+    /// Unsafely construct a JsonString from a raw str.
+    ///
+    /// unsafe because it assumes `s` is a valid JSON string (all control chars escaped, no invalid
+    /// escapes, no un-escaped '"')
+    pub unsafe fn from_str_unchecked(s: &'a str) -> JsonString<'a> {
         JsonString{
             raw: s
         }
