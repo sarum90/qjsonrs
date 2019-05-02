@@ -574,9 +574,9 @@ impl JsonDecoder {
 #[cfg(test)]
 mod tests {
     use hamcrest2::prelude::*;
-    use super::{JsonDecoder, ConsumableBytes, JsonToken, DecodeError, Token};
+    use super::{JsonDecoder, ConsumableBytes, JsonToken, DecodeError, Token, DecodeResult};
     use serde_json::{Value, Map, Number};
-    use std::str::{FromStr, from_utf8};
+    use std::str::{FromStr};
     use std::str;
 
     #[derive(Debug)]
@@ -639,18 +639,26 @@ mod tests {
             }
         }
 
-        fn next_impl_end(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
-            dbg!(&self);
+        fn new_non_incremental(bytes: &'a [u8]) -> SyncConsumableBytes<'a> {
+            let end = bytes.len();
+            SyncConsumableBytes{
+                bytes,
+                start: 0,
+                end,
+            }
+        }
+
+        fn raw_next(&mut self, decoder: &mut JsonDecoder) -> DecodeResult<'a> {
             let mut bytes = ConsumeableByteAdvance::new(self);
-            dbg!(&bytes);
-            decoder.decode(bytes.bytes())?.unwrap_or(DecodeError::NeedsMore)
+            decoder.decode(bytes.bytes())
+        }
+
+        fn next_impl_end(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
+            self.raw_next(decoder)?.unwrap_or(DecodeError::NeedsMore)
         }
 
         fn next_impl(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
-            dbg!(&self);
-            let mut bytes = ConsumeableByteAdvance::new(self);
-            dbg!(&bytes);
-            decoder.decode(bytes.bytes())?.terminated_or(DecodeError::NeedsMore)
+            self.raw_next(decoder)?.terminated_or(DecodeError::NeedsMore)
         }
 
         fn next(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
@@ -669,7 +677,7 @@ mod tests {
         }
     }
 
-    fn consume_value_impl2<'a>(decoder: &mut JsonDecoder, scb: &mut SyncConsumableBytes<'a>, last: bool) -> Result<ConsumedValue, DecodeError> {
+    fn consume_value_impl2<'a>(decoder: &mut JsonDecoder, scb: &mut SyncConsumableBytes<'a>) -> Result<ConsumedValue, DecodeError> {
         dbg!(&scb);
         let tok = scb.next(decoder)?;
         Ok(match tok {
@@ -687,7 +695,7 @@ mod tests {
             JsonToken::StartArray => {
                 let mut res = vec![];
                 loop {
-                    match consume_value_impl2(decoder, scb, last)? {
+                    match consume_value_impl2(decoder, scb)? {
                         ConsumedValue::Value(v) => {
                             res.push(v);
                         },
@@ -703,11 +711,9 @@ mod tests {
                 let mut res = Map::new();
                 loop {
                     {
-                        // let mut bytes = ConsumeableByteAdvance::new(scb);
-                        //match consume_value_impl2(decoder, scb, last)? {
                         match scb.next(decoder)? {
                             JsonToken::JsKey(k) => {
-                                res.insert(k.into(), consume_value_impl2(decoder, scb, last)?.unwrap());//bytes.bytes())?);
+                                res.insert(k.into(), consume_value_impl2(decoder, scb)?.unwrap());
                             },
                             JsonToken::EndObject => {
                                 break;
@@ -722,61 +728,10 @@ mod tests {
         })
     }
 
-    fn consume_value_impl<'a>(decoder: &mut JsonDecoder, bytes: &mut ConsumableBytes<'a>, last: bool) -> Result<ConsumedValue, DecodeError> {
-        let tok = if last {
-            decoder.decode(bytes)?.unwrap_or(DecodeError::NeedsMore)?
-        } else {
-            decoder.decode(bytes)?.terminated_or(DecodeError::NeedsMore)?
-        };
-        Ok(match tok {
-            JsonToken::JsNull => {ConsumedValue::Value(Value::Null)},
-            JsonToken::JsBoolean(b) => {ConsumedValue::Value(Value::Bool(b))},
-            JsonToken::JsNumber(s) => {
-                ConsumedValue::Value(
-                    Value::Number({
-                        println!("parsing: {:?}", s);
-                        Number::from_str(s).expect("Should be able to read JSON number from string.")
-                    })
-                )
-            },
-            JsonToken::JsString(jsstr) => {ConsumedValue::Value(Value::String(jsstr.into()))},
-            JsonToken::StartArray => {
-                let mut res = vec![];
-                loop {
-                    match consume_value_impl(decoder, bytes, last)? {
-                        ConsumedValue::Value(v) => {
-                            res.push(v);
-                        },
-                        ConsumedValue::EndArray => {
-                            break;
-                        }
-                    }
-                }
-                ConsumedValue::Value(Value::Array(res))
-            },
-            JsonToken::EndArray => { ConsumedValue::EndArray },
-            JsonToken::StartObject => {
-                let mut res = Map::new();
-                loop {
-                    match decoder.decode(bytes)? {
-                        Token::Terminated(JsonToken::JsKey(k)) => {
-                            res.insert(k.into(), consume_value(decoder, bytes)?);
-                        },
-                        Token::Terminated(JsonToken::EndObject) => {
-                            break;
-                        },
-                        t => { panic!("Unexpected token while parsing objects: {:?}", t); }
-                    }
-                }
-                ConsumedValue::Value(Value::Object(res))
-            },
-            unexp => { panic!("Unexpected js token {:?}", unexp); },
-        })
-    }
-
-    fn consume_value<'a>(decoder: &mut JsonDecoder, bytes: &mut ConsumableBytes<'a>) -> Result<Value, DecodeError>
+    fn consume_value2<'a>(decoder: &mut JsonDecoder, bytes: &'a [u8]) -> Result<Value, DecodeError>
     {
-        Ok(consume_value_impl(decoder, bytes, true)?.unwrap())
+        let mut scb = SyncConsumableBytes::new_non_incremental(bytes);
+        Ok(consume_value_impl2(decoder, &mut scb)?.unwrap())
     }
 
     fn normalize_value(v: Value) -> Value {
@@ -790,66 +745,44 @@ mod tests {
     // Validate that feeding the input in 1 byte at a time is the same as filling the input all at
     // once.
     fn validate_chunked(input: &str) {
-        let mut fullbytes = ConsumableBytes::new(input.as_bytes());
         let mut fulldecoder = JsonDecoder::new();
-        let qjsonrs = consume_value(&mut fulldecoder, &mut fullbytes).map(normalize_value);
-        let in_bytes = input.as_bytes();
-        //let mut start = 0;
+        let qjsonrs = consume_value2(&mut fulldecoder, input.as_bytes()).map(normalize_value);
         let mut decoder = JsonDecoder::new();
-        let mut scb = SyncConsumableBytes::new(in_bytes);
-        //for end in 0..in_bytes.len() + 1 {
-            let sub_in_bytes = &in_bytes[..];
-            //let mut bytes = ConsumableBytes::new(sub_in_bytes);
-            //let whole_input = end == in_bytes.len();
-            let resp = consume_value_impl2(&mut decoder, &mut scb, true);
-            println!("Running {:?}", from_utf8(sub_in_bytes).unwrap());
-            //match (resp, bytes.len() == in_bytes.len()) {
-            match (resp, false) {
-                //(Err(DecodeError::NeedsMore), false) => {
-                //    println!("Needs more @ {:?}", from_utf8(sub_in_bytes).unwrap());
-                //    //println!("end {:?}, len {:?}", end, in_bytes.len());
-                //    println!("len {:?}", in_bytes.len());
-                //}
-                (Err(e), _) => {
-                    println!("Got {:?} @ {:?}", e, from_utf8(sub_in_bytes).unwrap());
-                    assert_that!(e, eq(qjsonrs.unwrap_err()));
-                    return;
-                }
-                (Ok(v), _) => {
-                    println!("Got {:?} @ {:?}", v, from_utf8(sub_in_bytes).unwrap());
-                    assert_that!(normalize_value(v.unwrap()), eq(qjsonrs.unwrap()));
-                    return;
-                }
-            };
-            // Advance the start of the slice according to how many bytes were consumed:
-            //start += sub_in_bytes.len() - bytes.len();
-        //}
-        //panic!("Should always get a error or value before end of byte stream. bytes: {:?}, expected: {:?}", str::from_utf8(in_bytes).unwrap(), qjsonrs)
+        let mut scb = SyncConsumableBytes::new(input.as_bytes());
+        let resp = consume_value_impl2(&mut decoder, &mut scb);
+        match (resp, false) {
+            (Err(e), _) => {
+                assert_that!(e, eq(qjsonrs.unwrap_err()));
+                return;
+            }
+            (Ok(v), _) => {
+                assert_that!(normalize_value(v.unwrap()), eq(qjsonrs.unwrap()));
+                return;
+            }
+        };
     }
 
     fn compare_serde_with_qjsonrs_impl(input: &str) -> Option<DecodeError> {
-        println!("Running input {:?}", input);
         validate_chunked(input);
-        let mut bytes = ConsumableBytes::new(input.as_bytes());
         let mut decoder = JsonDecoder::new();
+        let mut scb = SyncConsumableBytes::new_non_incremental(input.as_bytes());
         match Value::from_str(input).map(normalize_value) {
             Ok(serde) => {
-                let qjsonrs = normalize_value(consume_value(&mut decoder, &mut bytes).expect("Should be successful since serde was successful."));
+                let qjsonrs = normalize_value(consume_value_impl2(&mut decoder, &mut scb).expect("Should be successful since serde was successful.").unwrap());
                 assert_that!(qjsonrs, eq(serde));
-                match decoder.decode(&mut bytes).unwrap() {
-                    Token::Terminated(t) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
+                match scb.raw_next(&mut decoder) { // consume_value_impl2(&mut decoder, &mut scb) {
+                    Ok(Token::Terminated(t)) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
                     _ => {}
                 }
                 None
             },
             Err(_) => {
-                //Some(consume_value(&mut decoder, &mut bytes).expect_err("Expected to hit an err case, given serde error in serde parsing."))
-                match consume_value(&mut decoder, &mut bytes) {
+                match consume_value_impl2(&mut decoder, &mut scb) {
                     Err(e) => {
                         Some(e)
                     },
                     _  => {
-                        Some(consume_value(&mut decoder, &mut bytes).expect_err("Expected to hit an err case, given serde error in serde parsing."))
+                        Some(consume_value_impl2(&mut decoder, &mut scb).expect_err("Expected to hit an err case, given serde error in serde parsing."))
                     }
                 }
             },
