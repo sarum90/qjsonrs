@@ -41,12 +41,11 @@ unsafe fn unescape(s: &str) -> String {
                     let b = chs.next().expect("unescape unicode off end of string.");
                     let c = chs.next().expect("unescape unicode off end of string.");
                     let d = chs.next().expect("unescape unicode off end of string.");
-                    std::char::from_u32(
-                        ((a.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
+                    let num = ((a.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
                         ((b.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 8) +
                         ((c.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 4) +
-                        (d.to_digit(16).expect("Bad hex digit in \\u escape") as u32)
-                    ).expect("")
+                        (d.to_digit(16).expect("Bad hex digit in \\u escape") as u32);
+                    std::char::from_u32(num).expect("Bad UTF-8 character in escape sequence")
                 },
                 '"' => '"',
                 'n' => '\n',
@@ -54,6 +53,7 @@ unsafe fn unescape(s: &str) -> String {
                 '/' => '/',
                 'b' => '\x08',
                 'r' => '\r',
+                'f' => '\x0c',
                 't' => '\t',
                 unk => panic!("Unhandled escape {:?}", unk),
             })

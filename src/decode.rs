@@ -100,10 +100,14 @@ fn is_whitespace(c: u8) -> bool {
     }
 }
 
+fn is_json_control(c: char) -> bool {
+    c.is_ascii_control() && c != '\x7f'
+}
+
 fn validate_json_string(s: &str) -> Result<(), DecodeError> {
     let mut i = s.chars();
     while let Some(c) = i.next() {
-        match (c, c.is_control()) {
+        match (c, is_json_control(c)) {
             (_, true) | ('"', _) => {
                 let mut bytes = [0, 0, 0, 0];
                 c.encode_utf8(&mut bytes[..]);
@@ -112,15 +116,21 @@ fn validate_json_string(s: &str) -> Result<(), DecodeError> {
             ('\\', _) => {
                 match i.next() {
                     None => {
-                        return Err(DecodeError::NeedsMore);
+                        return Err(DecodeError::UnexpectedByte(b'\"'));
                     },
-                    Some('n') | Some('r') | Some('t') | Some('b') | Some('\\') | Some('"') | Some('/') => {},
+                    Some('n') | Some('f') | Some('r') | Some('t') | Some('b') | Some('\\') | Some('"') | Some('/') => {
+                    },
                     Some('u') => {
                         let mut cnt = 0;
+                        let mut ch: u32 = 0;
                         let mut b = i
                             .by_ref()
                             .take(4)
-                            .inspect(|_| cnt += 1)
+                            .inspect(|d| {
+                                cnt += 1;
+                                ch = ch << 4;
+                                ch += d.to_digit(16).unwrap_or(0);
+                            })
                             .skip_while(|c| c.is_digit(16));
                         match b.next() {
                             None => {},
@@ -131,7 +141,10 @@ fn validate_json_string(s: &str) -> Result<(), DecodeError> {
                             },
                         }
                         if cnt < 4 {
-                            return Err(DecodeError::NeedsMore);
+                            return Err(DecodeError::UnexpectedByte(b'\"'));
+                        }
+                        if std::char::from_u32(ch).is_none() {
+                            return Err(DecodeError::InvalidUtf8);
                         }
                     },
                     Some(c2) => {
@@ -264,9 +277,11 @@ impl<'a> ConsumableBytes<'a> {
     }
 
     fn decimal_point(&mut self) -> Result<NumberLength, DecodeError> {
-        match self.consume_next() {
+        let c = self.consume_next();
+        match c {
             Some(b'.') => Ok(self.fraction_first_digit()? + 1),
             Some(b'e') | Some(b'E') => Ok(self.exp()? + 1),
+            Some(b'0' ... b'9') => Err(DecodeError::UnexpectedByte(c.unwrap())),
             Some(_) => Ok(NumberLength::Terminated(0)),
             None => Ok(NumberLength::Unterminated(0)),
         }
@@ -329,8 +344,8 @@ impl JsonDecoder {
                     let pref = &bytes.bytes[i..i+q];
                     let bs_count = if pref.len() > 0 {
                         let non_bs = pref.iter().enumerate().rfind(|(_, x)| **x != b'\\');
-                        let (non_bs_idx, _) = non_bs.unwrap_or((0, &0));
-                        pref.len() - non_bs_idx - 1
+                        let (non_bs_idx, _) = non_bs.map(|(x, c)| (x+1, c)).unwrap_or((0, &0));
+                        pref.len() - non_bs_idx
                     } else {
                         0
                     };
@@ -539,9 +554,9 @@ impl JsonDecoder {
                 TokenType::ObjectStart
             },
             Token::Terminated(JsonToken::EndObject) | Token::Unterminated(JsonToken::EndObject) => {
-                //if self.previous != TokenType::ObjectStart {
-                //    return Err(DecodeError::UnexpectedByte(b'}'));
-                //}
+                if self.previous != TokenType::ObjectStart {
+                    return Err(DecodeError::UnexpectedByte(b'}'));
+                }
                 self.stack.pop();
                 TokenType::Value
             },
@@ -575,7 +590,8 @@ impl JsonDecoder {
 mod tests {
     use hamcrest2::prelude::*;
     use super::{JsonDecoder, ConsumableBytes, JsonToken, DecodeError, Token, DecodeResult};
-    use serde_json::{Value, Map, Number};
+    use serde_json::{Value, Map, Number, from_reader};
+    use std::io::Cursor;
     use std::str::{FromStr};
     use std::str;
 
@@ -599,6 +615,7 @@ mod tests {
         bytes: &'a [u8],
         start: usize,
         end: usize,
+        done: bool,
     }
 
     #[derive(Debug)]
@@ -636,6 +653,7 @@ mod tests {
                 bytes,
                 start: 0,
                 end: 0,
+                done: false,
             }
         }
 
@@ -645,20 +663,34 @@ mod tests {
                 bytes,
                 start: 0,
                 end,
+                done: false,
             }
         }
 
         fn raw_next(&mut self, decoder: &mut JsonDecoder) -> DecodeResult<'a> {
             let mut bytes = ConsumeableByteAdvance::new(self);
-            decoder.decode(bytes.bytes())
+            let n = decoder.decode(bytes.bytes());
+            n
         }
 
         fn next_impl_end(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
-            self.raw_next(decoder)?.unwrap_or(DecodeError::NeedsMore)
+            if self.done {
+                Err(DecodeError::NeedsMore)
+            } else {
+                match self.raw_next(decoder)? {
+                    Token::Terminated(t) => Ok(t),
+                    Token::Unterminated(t) => {self.done = true; Ok(t)},
+                    _ => Err(DecodeError::NeedsMore),
+                }
+            }
         }
 
         fn next_impl(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
-            self.raw_next(decoder)?.terminated_or(DecodeError::NeedsMore)
+            if self.done {
+                Err(DecodeError::NeedsMore)
+            } else {
+                self.raw_next(decoder)?.terminated_or(DecodeError::NeedsMore)
+            }
         }
 
         fn next(&mut self, decoder: &mut JsonDecoder) -> Result<JsonToken<'a>, DecodeError> {
@@ -668,17 +700,16 @@ mod tests {
                         self.end += 1;
                     },
                     o => {
-                        dbg!(&o);
                         return o;
                     },
                 }
             }
-            self.next_impl_end(decoder)
+            let a = self.next_impl_end(decoder);
+            a
         }
     }
 
     fn consume_value_impl2<'a>(decoder: &mut JsonDecoder, scb: &mut SyncConsumableBytes<'a>) -> Result<ConsumedValue, DecodeError> {
-        dbg!(&scb);
         let tok = scb.next(decoder)?;
         Ok(match tok {
             JsonToken::JsNull => {ConsumedValue::Value(Value::Null)},
@@ -686,8 +717,14 @@ mod tests {
             JsonToken::JsNumber(s) => {
                 ConsumedValue::Value(
                     Value::Number({
-                        println!("parsing: {:?}", s);
-                        Number::from_str(s).expect("Should be able to read JSON number from string.")
+                        // I want to do: .expect("Should be able to read JSON number from string.")
+                        //
+                        // But sadly... serde_json cannot handle super large number, fake a
+                        // different error in that case for now.
+                        match Number::from_str(s) {
+                            Ok(o) => {o}
+                            Err(_) => { return Err(DecodeError::UnexpectedByte(b'%')); }
+                        }
                     })
                 )
             },
@@ -735,10 +772,21 @@ mod tests {
     }
 
     fn normalize_value(v: Value) -> Value {
-        if v.as_f64() == Some(0.0) {
-            json!(0)
-        } else {
-            v
+        match v {
+            Value::Array(a) => {
+                Value::Array(a.iter().map(|v| normalize_value(v.clone())).collect())
+            },
+            Value::Object(o) => {
+                Value::Object(o.iter().map(|(k, v)| (k.clone(), normalize_value(v.clone()))).collect())
+            }
+            Value::Number(n) => {
+                if n.as_f64() == Some(0.0) {
+                    json!(0)
+                } else {
+                    Value::Number(n)
+                }
+            },
+            d => d
         }
     }
 
@@ -763,26 +811,36 @@ mod tests {
     }
 
     fn compare_serde_with_qjsonrs_impl(input: &str) -> Option<DecodeError> {
-        validate_chunked(input);
+        //validate_chunked(input);
         let mut decoder = JsonDecoder::new();
         let mut scb = SyncConsumableBytes::new_non_incremental(input.as_bytes());
-        match Value::from_str(input).map(normalize_value) {
+        let mut c = Cursor::new(input.as_bytes());
+        let v: Result<Value, _> = dbg!(from_reader(&mut c));
+        match v.map(normalize_value) {
             Ok(serde) => {
                 let qjsonrs = normalize_value(consume_value_impl2(&mut decoder, &mut scb).expect("Should be successful since serde was successful.").unwrap());
                 assert_that!(qjsonrs, eq(serde));
-                match scb.raw_next(&mut decoder) { // consume_value_impl2(&mut decoder, &mut scb) {
+                match scb.raw_next(&mut decoder) {
                     Ok(Token::Terminated(t)) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
                     _ => {}
                 }
                 None
             },
-            Err(_) => {
+            Err(se) => {
                 match consume_value_impl2(&mut decoder, &mut scb) {
                     Err(e) => {
                         Some(e)
                     },
                     _  => {
-                        Some(consume_value_impl2(&mut decoder, &mut scb).expect_err("Expected to hit an err case, given serde error in serde parsing."))
+                        let trailing = format!("{}", se).contains("trailing characters");
+                        if !trailing {
+                            Some(consume_value_impl2(&mut decoder, &mut scb).expect_err("Expected to hit an err case, given serde error in serde parsing."))
+                        } else {
+                            // In cases of trailing characters serde can report an error, but we
+                            // don't have an error in qjsonrs where we want to be able to consume
+                            // streams of json values.
+                            None
+                        }
                     }
                 }
             },
@@ -811,6 +869,7 @@ mod tests {
         compare_serde_with_qjsonrs("\"my \\b string\"");
         compare_serde_with_qjsonrs("\"my \\n string\"");
         compare_serde_with_qjsonrs("\"my \\r string\"");
+        compare_serde_with_qjsonrs("\"my \\f string\"");
         compare_serde_with_qjsonrs("\"my \\t string\"");
         compare_serde_with_qjsonrs("\"my \\u0022 string\"");
         compare_serde_with_qjsonrs("\"my \\u263A smiley\"");
@@ -819,11 +878,11 @@ mod tests {
 
     #[test]
     fn bad_string() {
+        compare_serde_with_qjsonrs("\" \"");
         for c in b'\x00'..b'\x7f' {
             if c != b'"' && c != b'\\' {
                 let bs = [b'"', c, b'"'];
                 let st = str::from_utf8(&bs[..]).expect("ASCII should be valid UTF8");
-                println!("Workin on {:?}", st);
                 compare_serde_with_qjsonrs(st);
             }
         }
@@ -856,6 +915,7 @@ mod tests {
     fn bad_num() {
         compare_serde_with_qjsonrs("1234.56ecat");
         compare_serde_with_qjsonrs("1234.56cat");
+        compare_serde_with_qjsonrs("02");
     }
 
     #[test]
@@ -908,5 +968,20 @@ mod tests {
         compare_serde_with_qjsonrs("{\"one\": []}");
         compare_serde_with_qjsonrs("{ \"one\"  : {\"one\":{},\"two\":{\"12\":null}} }");
         compare_serde_with_qjsonrs("{\"a\": {} , \"one\": {\"[]\": [{}, null, {\"a\":[{}]}]}}");
+    }
+
+    #[test]
+    fn crashes() {
+        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, [}]");
+        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"b\u{007f}b\": true}, false, []]");
+        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, []]6");
+        //compare_serde_with_qjsonrs("[1,-0, {\"cat\": null, \"bob\": true}, false, []]");
+        //compare_serde_with_qjsonrs("[1,-0, {\"cat\": -0, \"bob\": true}, false, []]");
+        //compare_serde_with_qjsonrs("[999E99999999\u{0018} nul , \"bob\": truc}, @alsz,\u{000b}[]]");
+        //compare_serde_with_qjsonrs("[[1");
+        //compare_serde_with_qjsonrs("[1, 2, {\"c\\u\": null, \"bob\": true}, false, []]");
+        //compare_serde_with_qjsonrs(r#""\\""#);
+        //compare_serde_with_qjsonrs("\"\u{001f}\" 2");
+        compare_serde_with_qjsonrs("\"\\\\\\udEEEEEEEEE\"");
     }
 }
