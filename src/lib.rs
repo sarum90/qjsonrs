@@ -1,5 +1,4 @@
-// TODO: re-enable
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 //! # qjsonrs
 //!
 //! A quick JSON tokenizer.
@@ -23,15 +22,16 @@
 //!         JsKey,
 //!         JsNumber
 //!     },
+//!     JsonString,
 //!     JsonTokenIterator
 //! };
 //!
 //! # fn main() -> Result<(), qjsonrs::Error> {
 //! let mut stream = JsonStream::from_read(&b"{\"test\": 1, \"arr\": []}"[..], 256)?;
 //! assert_eq!(stream.next()?.unwrap(), StartObject);
-//! assert_eq!(stream.next()?.unwrap(), JsKey("test".into()));
+//! assert_eq!(stream.next()?.unwrap(), JsKey(JsonString::from_str("test").unwrap()));
 //! assert_eq!(stream.next()?.unwrap(), JsNumber("1"));
-//! assert_eq!(stream.next()?.unwrap(), JsKey("arr".into()));
+//! assert_eq!(stream.next()?.unwrap(), JsKey(JsonString::from_str("arr").unwrap()));
 //! assert_eq!(stream.next()?.unwrap(), StartArray);
 //! assert_eq!(stream.next()?.unwrap(), EndArray);
 //! assert_eq!(stream.next()?.unwrap(), EndObject);
@@ -100,7 +100,7 @@ use std::io::Read;
 use std::str;
 
 pub use crate::token::{JsonString, JsonToken};
-pub use crate::decode::{JsonDecoder, ConsumableBytes, DecodeError, Token, DecodeResult};
+pub use crate::decode::{JsonDecoder, ConsumableBytes, DecodeError, DecodeResult};
 
 #[derive(Clone)]
 enum ParsedState {
@@ -644,9 +644,9 @@ impl<R: Read> JsonTokenIterator for JsonStream<R> {
             Some(ParsedState::EndArray) =>
                 Some(JsonToken::EndArray),
             Some(ParsedState::JsString(len)) =>
-                Some(JsonToken::JsString(self.curr_str()[..len].into())),
+                Some(JsonToken::JsString(JsonString::from_str(self.curr_str()[..len].into()).expect("Should be good escape"))),
             Some(ParsedState::JsKey(len)) =>
-                Some(JsonToken::JsKey(self.curr_str()[..len].into())),
+                Some(JsonToken::JsKey(JsonString::from_str(self.curr_str()[..len].into()).expect("Should be good escape"))),
             Some(ParsedState::JsNumber(len)) =>
                 Some(JsonToken::JsNumber(&self.curr_str()[..len])),
             Some(ParsedState::JsBoolean(b)) =>
@@ -661,7 +661,7 @@ impl<R: Read> JsonTokenIterator for JsonStream<R> {
 #[cfg(test)]
 mod tests {
     use hamcrest2::prelude::*;
-    use super::{JsonStream, JsonToken, JsonTokenIterator};
+    use super::{JsonStream, JsonToken, JsonTokenIterator, JsonString};
     use serde_json::{Value, Map, Number};
     use std::io::Read;
     use std::str::FromStr;
@@ -758,7 +758,7 @@ mod tests {
     #[test]
     fn simple_string() {
         let mut stream = JsonStream::from_read(&b"\"my string\""[..], 256).unwrap();
-        assert_that!(stream.next().unwrap().unwrap(), eq(JsonToken::JsString("my string".into())));
+        assert_that!(stream.next().unwrap().unwrap(), eq(JsonToken::JsString(JsonString::from_str("my string").unwrap())));
         assert_that!(stream.next().unwrap(), none());
     }
 

@@ -1,5 +1,4 @@
-
-use crate::token::{JsonToken, JsonString};
+use crate::token::{JsonToken, JsonString, JsonStringParseError};
 use std::str;
 use std::str::Utf8Error;
 use std::ops::Add;
@@ -22,9 +21,17 @@ enum TokenType {
 }
 
 #[derive(Debug, PartialEq)]
+/// Error type for decoding
 pub enum DecodeError {
+    /// Re-run decode with additional input.
     NeedsMore,
+    /// More input needed to finish parse, but input bytes marked as end of stream.
+    UnexpectedEndOfStream,
+    /// Invalid UTF-8 character in input bytes.
     InvalidUtf8,
+    /// String contains `\uXXXX` sequence where 0xXXXX is an invalid unicode code point.
+    InvalidUnicodeEscape(u32),
+    /// Generic error parsing found an invalid byte.
     UnexpectedByte(u8),
 }
 
@@ -37,60 +44,39 @@ impl From<Utf8Error> for DecodeError {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum Token<'a> {
-    Terminated(JsonToken<'a>),
-    Unterminated(JsonToken<'a>),
-    EndOfStream,
-}
+struct NumberLength(usize);
 
-impl<'a> Token<'a> {
-    pub fn unwrap_or<E>(self, e: E) -> Result<JsonToken<'a>, E> {
-        match self {
-            Token::Terminated(t) => Ok(t),
-            Token::Unterminated(t) => Ok(t),
-            _ => Err(e),
-        }
+impl From<usize> for NumberLength {
+    fn from(u: usize) -> NumberLength{
+        NumberLength(u)
     }
-
-    pub fn terminated_or<E>(self, e: E) -> Result<JsonToken<'a>, E> {
-        match self {
-            Token::Terminated(t) => Ok(t),
-            _ => Err(e),
-        }
-    }
-}
-
-enum NumberLength {
-    Terminated(usize),
-    Unterminated(usize),
 }
 
 impl Add<usize> for NumberLength {
     type Output = NumberLength;
 
     fn add(self, other: usize) -> NumberLength {
-        match self {
-            NumberLength::Terminated(i) => NumberLength::Terminated(i + other),
-            NumberLength::Unterminated(i) => NumberLength::Unterminated(i + other),
-        }
+        NumberLength(self.0 + other)
     }
 }
 
 impl NumberLength {
     fn len(&self) -> usize {
-        match self {
-            NumberLength::Terminated(n) => *n,
-            NumberLength::Unterminated(n) => *n,
-        }
+        self.0
     }
 }
 
-pub type DecodeResult<'a> = Result<Token<'a>, DecodeError>;
+/// Result from decode:
+///  - Ok(None)    End of stream.
+///  - Ok(Some(T)) Token T in JSON stream.
+///  - Some() Token T in JSON stream.
+pub type DecodeResult<'a> = Result<Option<JsonToken<'a>>, DecodeError>;
 
+/// A set of bytes that can be consumed during decoding.
 #[derive(Clone, Debug)]
 pub struct ConsumableBytes<'a> {
-    bytes: &'a [u8]
+    bytes: &'a [u8],
+    end_of_stream: bool,
 }
 
 fn is_whitespace(c: u8) -> bool {
@@ -100,77 +86,59 @@ fn is_whitespace(c: u8) -> bool {
     }
 }
 
-fn is_json_control(c: char) -> bool {
-    c.is_ascii_control() && c != '\x7f'
+#[derive(Debug)]
+enum ConsumeResult<T> {
+    Consumed(T),
+    EndOfStream,
+    EndOfChunk,
 }
 
-fn validate_json_string(s: &str) -> Result<(), DecodeError> {
-    let mut i = s.chars();
-    while let Some(c) = i.next() {
-        match (c, is_json_control(c)) {
-            (_, true) | ('"', _) => {
-                let mut bytes = [0, 0, 0, 0];
-                c.encode_utf8(&mut bytes[..]);
-                return Err(DecodeError::UnexpectedByte(bytes[0]));
-            },
-            ('\\', _) => {
-                match i.next() {
-                    None => {
-                        return Err(DecodeError::UnexpectedByte(b'\"'));
-                    },
-                    Some('n') | Some('f') | Some('r') | Some('t') | Some('b') | Some('\\') | Some('"') | Some('/') => {
-                    },
-                    Some('u') => {
-                        let mut cnt = 0;
-                        let mut ch: u32 = 0;
-                        let mut b = i
-                            .by_ref()
-                            .take(4)
-                            .inspect(|d| {
-                                cnt += 1;
-                                ch = ch << 4;
-                                ch += d.to_digit(16).unwrap_or(0);
-                            })
-                            .skip_while(|c| c.is_digit(16));
-                        match b.next() {
-                            None => {},
-                            Some(c2) => {
-                                let mut bytes = [0, 0, 0, 0];
-                                c2.encode_utf8(&mut bytes[..]);
-                                return Err(DecodeError::UnexpectedByte(bytes[0]));
-                            },
-                        }
-                        if cnt < 4 {
-                            return Err(DecodeError::UnexpectedByte(b'\"'));
-                        }
-                        if std::char::from_u32(ch).is_none() {
-                            return Err(DecodeError::InvalidUtf8);
-                        }
-                    },
-                    Some(c2) => {
-                        let mut bytes = [0, 0, 0, 0];
-                        c2.encode_utf8(&mut bytes[..]);
-                        return Err(DecodeError::UnexpectedByte(bytes[0]));
-                    },
-                }
-            },
-            (_, _) => {},
+impl<T: std::fmt::Debug> ConsumeResult<T> {
+    fn unwrap(self) -> T {
+        match self {
+            ConsumeResult::Consumed(t) => t,
+            c => panic!("Bad unwrap on ConsumeResult, found {:?}", c),
         }
     }
-    Ok(())
 }
 
 impl<'a> ConsumableBytes<'a> {
+    /// Construct a chunk of consumable bytes.
+    ///
+    /// Constructing in this manner indicates that there are more bytes in the stream. Use
+    /// new_end_of_stream if these are the final bytes in the stream.
     pub fn new(bytes: &'a [u8]) -> ConsumableBytes<'a> {
-        ConsumableBytes{bytes}
+        ConsumableBytes{
+            bytes,
+            end_of_stream: false,
+        }
     }
 
+    /// Construct a chunk of consumable bytes.
+    ///
+    /// Constructing in this manner indicates that these are the final bytes in the stream.
+    pub fn new_end_of_stream(bytes: &'a [u8]) -> ConsumableBytes<'a> {
+        ConsumableBytes{
+            bytes,
+            end_of_stream: true,
+        }
+    }
+
+    /// Length of the remaining bytes.
     pub fn len(&self) -> usize {
         self.bytes.len()
     }
 
+    /// Consume n bytes from the beginning of the bytes.
+    ///
+    /// Panics if `n` is larger than `len()`
     pub fn consume_bytes(&mut self, n: usize) {
         self.bytes = &self.bytes[n..];
+    }
+
+    /// Returns the slice of bytes that still remain in the ConsumableBytes.
+    pub fn remaining(&self) -> &'a [u8] {
+        return &self.bytes[..]
     }
 
     fn expect_bytes(&mut self, bs: &[u8]) -> Result<(), DecodeError> {
@@ -211,28 +179,36 @@ impl<'a> ConsumableBytes<'a> {
         self.bytes.iter().next().map(|c| *c)
     }
 
-    fn consume_next(&mut self) -> Option<u8> {
+    fn consume_next(&mut self) -> ConsumeResult<u8> {
         let r = self.next();
         if r.is_some() {
             self.consume_bytes(1);
+            ConsumeResult::Consumed(r.unwrap())
+        } else {
+            if self.end_of_stream {
+                ConsumeResult::EndOfStream
+            } else {
+                ConsumeResult::EndOfChunk
+            }
         }
-        r
     }
 
     fn unsigned_number(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            Some(b'1' ... b'9') => Ok(self.int_digits()? + 1),
-            Some(b'0') => Ok(self.decimal_point()? + 1),
-            Some(c) => Err(DecodeError::UnexpectedByte(c)),
-            None => Err(DecodeError::NeedsMore),
+            ConsumeResult::Consumed(b'1' ... b'9') => Ok(self.int_digits()? + 1),
+            ConsumeResult::Consumed(b'0') => Ok(self.decimal_point()? + 1),
+            ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
+            ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
+            ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
         }
     }
 
     fn fraction_first_digit(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            Some(b'0' ... b'9') => Ok(self.fraction_digits()? + 1),
-            Some(c) => Err(DecodeError::UnexpectedByte(c)),
-            None => Err(DecodeError::NeedsMore),
+            ConsumeResult::Consumed(b'0' ... b'9') => Ok(self.fraction_digits()? + 1),
+            ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
+            ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
+            ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
         }
     }
 
@@ -240,19 +216,21 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                Some(b'0'...b'9') => { i += 1 },
-                Some(b'e') | Some(b'E') => {return Ok(self.exp()? + i + 1)},
-                Some(_) => {return Ok(NumberLength::Terminated(i))},
-                None => {return Ok(NumberLength::Unterminated(i))},
+                ConsumeResult::Consumed(b'0'...b'9') => { i += 1 },
+                ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => {return Ok(self.exp()? + i + 1)},
+                ConsumeResult::Consumed(_) => {return Ok(i.into())},
+                ConsumeResult::EndOfStream => {return Ok(i.into())},
+                ConsumeResult::EndOfChunk => {return Err(DecodeError::NeedsMore)},
             }
         }
     }
 
     fn exp_first_digit(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            Some(b'0' ... b'9') => Ok(self.exp_digits()? + 1),
-            Some(c) => Err(DecodeError::UnexpectedByte(c)),
-            None => Err(DecodeError::NeedsMore),
+            ConsumeResult::Consumed(b'0' ... b'9') => Ok(self.exp_digits()? + 1),
+            ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
+            ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
+            ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
         }
     }
 
@@ -260,30 +238,33 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                Some(b'0'... b'9') => { i += 1; },
-                Some(_) => {return Ok(NumberLength::Terminated(i))},
-                None => {return Ok(NumberLength::Unterminated(i))},
+                ConsumeResult::Consumed(b'0'... b'9') => { i += 1; },
+                ConsumeResult::Consumed(_) => {return Ok(i.into())},
+                ConsumeResult::EndOfStream => {return Ok(i.into())},
+                ConsumeResult::EndOfChunk => {return Err(DecodeError::NeedsMore)},
             }
         }
     }
 
     fn exp(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            Some(b'+') | Some(b'-') => Ok(self.exp_first_digit()? + 1),
-            Some(b'0' ... b'9') => Ok(self.exp_digits()? + 1),
-            Some(c) => Err(DecodeError::UnexpectedByte(c)),
-            None => Err(DecodeError::NeedsMore),
+            ConsumeResult::Consumed(b'+') | ConsumeResult::Consumed(b'-') => Ok(self.exp_first_digit()? + 1),
+            ConsumeResult::Consumed(b'0' ... b'9') => Ok(self.exp_digits()? + 1),
+            ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
+            ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
+            ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
         }
     }
 
     fn decimal_point(&mut self) -> Result<NumberLength, DecodeError> {
         let c = self.consume_next();
         match c {
-            Some(b'.') => Ok(self.fraction_first_digit()? + 1),
-            Some(b'e') | Some(b'E') => Ok(self.exp()? + 1),
-            Some(b'0' ... b'9') => Err(DecodeError::UnexpectedByte(c.unwrap())),
-            Some(_) => Ok(NumberLength::Terminated(0)),
-            None => Ok(NumberLength::Unterminated(0)),
+            ConsumeResult::Consumed(b'.') => Ok(self.fraction_first_digit()? + 1),
+            ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => Ok(self.exp()? + 1),
+            ConsumeResult::Consumed(b'0' ... b'9') => Err(DecodeError::UnexpectedByte(c.unwrap())),
+            ConsumeResult::Consumed(_) => Ok(0.into()),
+            ConsumeResult::EndOfStream => Ok(0.into()),
+            ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
         }
     }
 
@@ -291,11 +272,12 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                Some(b'0'...b'9') => { i += 1 },
-                Some(b'.') => {return Ok(self.fraction_first_digit()? + i + 1)},
-                Some(b'e') | Some(b'E') => {return Ok(self.exp()? + i + 1)},
-                Some(_) => {return Ok(NumberLength::Terminated(i))},
-                None => {return Ok(NumberLength::Unterminated(i))},
+                ConsumeResult::Consumed(b'0'...b'9') => { i += 1 },
+                ConsumeResult::Consumed(b'.') => {return Ok(self.fraction_first_digit()? + i + 1)},
+                ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => {return Ok(self.exp()? + i + 1)},
+                ConsumeResult::Consumed(_) => {return Ok(i.into())},
+                ConsumeResult::EndOfStream => {return Ok(i.into())},
+                ConsumeResult::EndOfChunk => {return Err(DecodeError::NeedsMore)},
             }
         }
     }
@@ -317,21 +299,12 @@ impl JsonDecoder {
     }
 
     fn number_of_len<'a>(&self, bytes: &mut ConsumableBytes<'a>, nl: NumberLength) -> DecodeResult<'a> {
-        let n = nl.len();
         // TODO: consider using from_utf8_unchecked, we will already have validated that the stream
         // is valid ascii at this point.
+        let n = nl.len();
         let res = str::from_utf8(&bytes.bytes[..n])?;
-        match nl {
-            NumberLength::Terminated(_) => {
-                bytes.consume_bytes(n);
-                Ok(Token::Terminated(JsonToken::JsNumber(res)))
-            },
-            NumberLength::Unterminated(_) => {
-                // Unterminted tokens should not be consumed. Caller should either use the value
-                // and never call decode again, or call decode again with more data.
-                Ok(Token::Unterminated(JsonToken::JsNumber(res)))
-            },
-        }
+        bytes.consume_bytes(n);
+        Ok(Some(JsonToken::JsNumber(res)))
     }
 
     fn decode_str<'a>(&self, bytes: &mut ConsumableBytes<'a>) -> Result<JsonString<'a>, DecodeError> {
@@ -367,8 +340,12 @@ impl JsonDecoder {
             Some(l) => {
                 let s = str::from_utf8(&bytes.bytes[1..l+1])?;
                 bytes.consume_bytes(l+2);
-                validate_json_string(s)?;
-                Ok(unsafe { JsonString::from_str_unchecked(s) } )
+                Ok(match JsonString::from_str(s) {
+                    Ok(t) => t,
+                    Err(JsonStringParseError::UnexpectedByte(b)) => {return Err(DecodeError::UnexpectedByte(b));},
+                    Err(JsonStringParseError::BadUnicodeEscape(u)) => {return Err(DecodeError::InvalidUnicodeEscape(u));},
+                    Err(JsonStringParseError::EarlyTermination) => { return Err(DecodeError::UnexpectedByte(b'\"'));},
+                })
             },
             None => Err(DecodeError::NeedsMore),
         }
@@ -378,15 +355,15 @@ impl JsonDecoder {
         match bytes.next() {
             Some(b'n') => {
                 bytes.expect_bytes(b"null")?;
-                Ok(Token::Terminated(JsonToken::JsNull))
+                Ok(Some(JsonToken::JsNull))
             },
             Some(b'f') => {
                 bytes.expect_bytes(b"false")?;
-                Ok(Token::Terminated(JsonToken::JsBoolean(false)))
+                Ok(Some(JsonToken::JsBoolean(false)))
             },
             Some(b't') => {
                 bytes.expect_bytes(b"true")?;
-                Ok(Token::Terminated(JsonToken::JsBoolean(true)))
+                Ok(Some(JsonToken::JsBoolean(true)))
             },
             Some(b'-') => {
                 let mut bs = bytes.clone();
@@ -404,43 +381,50 @@ impl JsonDecoder {
                 self.number_of_len(bytes, bs.int_digits()? + 1)
             },
             Some(b'"') => {
-                Ok(Token::Terminated(JsonToken::JsString(self.decode_str(bytes)?)))
+                Ok(Some(JsonToken::JsString(self.decode_str(bytes)?)))
             },
             Some(b'{') => {
                 bytes.consume_bytes(1);
-                Ok(Token::Terminated(JsonToken::StartObject))
+                Ok(Some(JsonToken::StartObject))
             },
             Some(b'}') => {
                 bytes.consume_bytes(1);
-                Ok(Token::Terminated(JsonToken::EndObject))
+                Ok(Some(JsonToken::EndObject))
             },
             Some(b'[') => {
                 bytes.consume_bytes(1);
-                Ok(Token::Terminated(JsonToken::StartArray))
+                Ok(Some(JsonToken::StartArray))
             },
             Some(b']') => {
                 bytes.consume_bytes(1);
-                Ok(Token::Terminated(JsonToken::EndArray))
+                Ok(Some(JsonToken::EndArray))
             },
             Some(c) => Err(DecodeError::UnexpectedByte(c)),
             None => {
                 if self.stack.len() > 0 {
                     Err(DecodeError::NeedsMore)
                 } else {
-                    Ok(Token::EndOfStream)
+                    Ok(None)
                 }
             },
         }
     }
 
-    /// Decodes bytes into JsonTokens. N.B. the returned token can reference the input bytes.
+    /// Decodes bytes into JsonTokens. N.B. The returned token can reference the input bytes.
+    ///
+    /// Fully decoded bytes will be consumed from bytes, however, unconsumed bytes will remain.
+    /// N.B.
+    ///  If this function returns DecodeError::NeedsMore, in subsequent calls to decode, whatever
+    ///  bytes are passed to decode must start with bytes.remaining() from the previous call.
+    ///  
+    ///  If this is not done, it is highly likely this function will panic on next invocation.
     pub fn decode<'a>(&mut self, bytes: &mut ConsumableBytes<'a>) -> DecodeResult<'a> {
         bytes.consume_ws();
         match (self.stack.last(), &self.previous) {
             (Some(Context::Object), TokenType::ObjectComma) => {
                 match bytes.next()  {
                     Some(b'"') => {
-                        let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                        let res = Ok(Some(JsonToken::JsKey(self.decode_str(bytes)?)));
                         self.previous = TokenType::Key;
                         return res;
                     },
@@ -460,7 +444,7 @@ impl JsonDecoder {
                         bytes.consume_ws();
                         match bytes.next()  {
                             Some(b'"') => {
-                                let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                                let res = Ok(Some(JsonToken::JsKey(self.decode_str(bytes)?)));
                                 self.previous = TokenType::Key;
                                 return res;
                             },
@@ -476,7 +460,7 @@ impl JsonDecoder {
                         bytes.consume_bytes(1);
                         self.stack.pop();
                         self.previous = TokenType::Value;
-                        return Ok(Token::Terminated(JsonToken::EndObject));
+                        return Ok(Some(JsonToken::EndObject));
                     },
                     Some(c) => {
                         return Err(DecodeError::UnexpectedByte(c));
@@ -489,7 +473,7 @@ impl JsonDecoder {
             (Some(Context::Object), TokenType::ObjectStart) => {
                 match bytes.next() {
                     Some(b'"') => {
-                        let res = Ok(Token::Terminated(JsonToken::JsKey(self.decode_str(bytes)?)));
+                        let res = Ok(Some(JsonToken::JsKey(self.decode_str(bytes)?)));
                         self.previous = TokenType::Key;
                         return res;
                     },
@@ -497,7 +481,7 @@ impl JsonDecoder {
                         bytes.consume_bytes(1);
                         self.stack.pop();
                         self.previous = TokenType::Value;
-                        return Ok(Token::Terminated(JsonToken::EndObject));
+                        return Ok(Some(JsonToken::EndObject));
                     },
                     Some(c) => {
                         return Err(DecodeError::UnexpectedByte(c));
@@ -532,7 +516,7 @@ impl JsonDecoder {
                         bytes.consume_bytes(1);
                         self.stack.pop();
                         self.previous = TokenType::Value;
-                        return Ok(Token::Terminated(JsonToken::EndArray));
+                        return Ok(Some(JsonToken::EndArray));
                     },
                     Some(c) => {
                         return Err(DecodeError::UnexpectedByte(c));
@@ -547,38 +531,33 @@ impl JsonDecoder {
         }
 
         let res = self.decode_value(bytes)?;
-        let prev = self.previous;
         self.previous = match res {
-            Token::Terminated(JsonToken::StartObject) | Token::Unterminated(JsonToken::StartObject) => {
+            Some(JsonToken::StartObject) => {
                 self.stack.push(Context::Object);
                 TokenType::ObjectStart
             },
-            Token::Terminated(JsonToken::EndObject) | Token::Unterminated(JsonToken::EndObject) => {
+            Some(JsonToken::EndObject) => {
                 if self.previous != TokenType::ObjectStart {
                     return Err(DecodeError::UnexpectedByte(b'}'));
                 }
                 self.stack.pop();
                 TokenType::Value
             },
-            Token::Terminated(JsonToken::StartArray) | Token::Unterminated(JsonToken::StartArray) => {
+            Some(JsonToken::StartArray) => {
                 self.stack.push(Context::Array);
                 TokenType::ArrayStart
             },
-            Token::Terminated(JsonToken::EndArray) | Token::Unterminated(JsonToken::EndArray) => {
+            Some(JsonToken::EndArray) => {
                 if self.previous != TokenType::ArrayStart {
                     return Err(DecodeError::UnexpectedByte(b']'));
                 }
                 self.stack.pop();
                 TokenType::Value
             },
-            Token::Terminated(_) => {
+            Some(_) => {
                 TokenType::Value
             },
-            Token::Unterminated(_) =>  {
-                // Don't update after unterminated tokens
-                prev
-            },
-            Token::EndOfStream =>  {
+            None =>  {
                 TokenType::Value
             }
         };
@@ -589,7 +568,7 @@ impl JsonDecoder {
 #[cfg(test)]
 mod tests {
     use hamcrest2::prelude::*;
-    use super::{JsonDecoder, ConsumableBytes, JsonToken, DecodeError, Token, DecodeResult};
+    use super::{JsonDecoder, ConsumableBytes, JsonToken, DecodeError, DecodeResult};
     use serde_json::{Value, Map, Number, from_reader};
     use std::io::Cursor;
     use std::str::{FromStr};
@@ -632,9 +611,13 @@ mod tests {
     }
 
     impl<'a, 'b> ConsumeableByteAdvance<'a, 'b> {
-        fn new(source: &'b mut SyncConsumableBytes<'a>) -> ConsumeableByteAdvance<'a, 'b> {
+        fn new(source: &'b mut SyncConsumableBytes<'a>, end: bool) -> ConsumeableByteAdvance<'a, 'b> {
             let in_len = source.end - source.start;
-            let bytes = ConsumableBytes::new(&source.bytes[source.start..source.end]);
+            let bytes = if end {
+                ConsumableBytes::new_end_of_stream(&source.bytes[source.start..source.end])
+            } else {
+                ConsumableBytes::new(&source.bytes[source.start..source.end])
+            };
             ConsumeableByteAdvance{
                 source,
                 bytes,
@@ -667,8 +650,8 @@ mod tests {
             }
         }
 
-        fn raw_next(&mut self, decoder: &mut JsonDecoder) -> DecodeResult<'a> {
-            let mut bytes = ConsumeableByteAdvance::new(self);
+        fn raw_next(&mut self, decoder: &mut JsonDecoder, end: bool) -> DecodeResult<'a> {
+            let mut bytes = ConsumeableByteAdvance::new(self, end);
             let n = decoder.decode(bytes.bytes());
             n
         }
@@ -677,9 +660,8 @@ mod tests {
             if self.done {
                 Err(DecodeError::NeedsMore)
             } else {
-                match self.raw_next(decoder)? {
-                    Token::Terminated(t) => Ok(t),
-                    Token::Unterminated(t) => {self.done = true; Ok(t)},
+                match self.raw_next(decoder, true)? {
+                    Some(t) => Ok(t),
                     _ => Err(DecodeError::NeedsMore),
                 }
             }
@@ -689,7 +671,7 @@ mod tests {
             if self.done {
                 Err(DecodeError::NeedsMore)
             } else {
-                self.raw_next(decoder)?.terminated_or(DecodeError::NeedsMore)
+                self.raw_next(decoder,false)?.ok_or(DecodeError::NeedsMore)
             }
         }
 
@@ -811,7 +793,7 @@ mod tests {
     }
 
     fn compare_serde_with_qjsonrs_impl(input: &str) -> Option<DecodeError> {
-        //validate_chunked(input);
+        validate_chunked(input);
         let mut decoder = JsonDecoder::new();
         let mut scb = SyncConsumableBytes::new_non_incremental(input.as_bytes());
         let mut c = Cursor::new(input.as_bytes());
@@ -820,8 +802,8 @@ mod tests {
             Ok(serde) => {
                 let qjsonrs = normalize_value(consume_value_impl2(&mut decoder, &mut scb).expect("Should be successful since serde was successful.").unwrap());
                 assert_that!(qjsonrs, eq(serde));
-                match scb.raw_next(&mut decoder) {
-                    Ok(Token::Terminated(t)) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
+                match scb.raw_next(&mut decoder, true) {
+                    Ok(Some(t)) => {panic!("Unexpected terminated token: {:?} after final parse.", t)}
                     _ => {}
                 }
                 None
@@ -972,16 +954,16 @@ mod tests {
 
     #[test]
     fn crashes() {
-        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, [}]");
-        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"b\u{007f}b\": true}, false, []]");
-        //compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, []]6");
-        //compare_serde_with_qjsonrs("[1,-0, {\"cat\": null, \"bob\": true}, false, []]");
-        //compare_serde_with_qjsonrs("[1,-0, {\"cat\": -0, \"bob\": true}, false, []]");
-        //compare_serde_with_qjsonrs("[999E99999999\u{0018} nul , \"bob\": truc}, @alsz,\u{000b}[]]");
-        //compare_serde_with_qjsonrs("[[1");
-        //compare_serde_with_qjsonrs("[1, 2, {\"c\\u\": null, \"bob\": true}, false, []]");
-        //compare_serde_with_qjsonrs(r#""\\""#);
-        //compare_serde_with_qjsonrs("\"\u{001f}\" 2");
+        compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, [}]");
+        compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"b\u{007f}b\": true}, false, []]");
+        compare_serde_with_qjsonrs("[1, 2, {\"cat\": null, \"bob\": true}, false, []]6");
+        compare_serde_with_qjsonrs("[1,-0, {\"cat\": null, \"bob\": true}, false, []]");
+        compare_serde_with_qjsonrs("[1,-0, {\"cat\": -0, \"bob\": true}, false, []]");
+        compare_serde_with_qjsonrs("[999E99999999\u{0018} nul , \"bob\": truc}, @alsz,\u{000b}[]]");
+        compare_serde_with_qjsonrs("[[1");
+        compare_serde_with_qjsonrs("[1, 2, {\"c\\u\": null, \"bob\": true}, false, []]");
+        compare_serde_with_qjsonrs(r#""\\""#);
+        compare_serde_with_qjsonrs("\"\u{001f}\" 2");
         compare_serde_with_qjsonrs("\"\\\\\\udEEEEEEEEE\"");
     }
 }

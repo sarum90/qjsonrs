@@ -5,13 +5,15 @@ pub struct JsonString<'a> {
     raw: &'a str,
 }
 
-// TODO: kill this.
-impl<'a> From<&'a str> for JsonString<'a> {
-    fn from(s: &'a str) -> JsonString<'a> {
-        JsonString{
-            raw: s
-        }
-    }
+#[derive(Debug)]
+pub enum JsonStringParseError {
+    UnexpectedByte(u8),
+    BadUnicodeEscape(u32),
+    EarlyTermination,
+}
+
+fn is_json_control(c: char) -> bool {
+    c.is_ascii_control() && c != '\x7f'
 }
 
 impl<'a> JsonString<'a> {
@@ -26,6 +28,66 @@ impl<'a> JsonString<'a> {
         JsonString{
             raw: s
         }
+    }
+
+    /// Safely construct a JsonString from a raw string.
+    pub fn from_str(s: &'a str) -> Result<JsonString<'a>, JsonStringParseError> {
+        let mut i = s.chars();
+        while let Some(c) = i.next() {
+            match (c, is_json_control(c)) {
+                (_, true) | ('"', _) => {
+                    let mut bytes = [0, 0, 0, 0];
+                    c.encode_utf8(&mut bytes[..]);
+                    return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
+                },
+                ('\\', _) => {
+                    match i.next() {
+                        None => {
+                            return Err(JsonStringParseError::EarlyTermination);
+                        },
+                        Some('n') | Some('f') | Some('r') | Some('t') | Some('b') | Some('\\') | Some('"') | Some('/') => {
+                        },
+                        Some('u') => {
+                            let mut cnt = 0;
+                            let mut ch: u32 = 0;
+                            let mut b = i
+                                .by_ref()
+                                .take(4)
+                                .inspect(|d| {
+                                    cnt += 1;
+                                    ch = ch << 4;
+                                    ch += d.to_digit(16).unwrap_or(0);
+                                })
+                                .skip_while(|c| c.is_digit(16));
+                            match b.next() {
+                                None => {},
+                                Some(c2) => {
+                                    let mut bytes = [0, 0, 0, 0];
+                                    c2.encode_utf8(&mut bytes[..]);
+                                    return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
+                                },
+                            }
+                            if cnt < 4 {
+                                return Err(JsonStringParseError::EarlyTermination);
+                            }
+                            if std::char::from_u32(ch).is_none() {
+                                return Err(JsonStringParseError::BadUnicodeEscape(ch));
+                            }
+                        },
+                        Some(c2) => {
+                            let mut bytes = [0, 0, 0, 0];
+                            c2.encode_utf8(&mut bytes[..]);
+                            return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
+                        },
+                    }
+                },
+                (_, _) => {},
+            }
+        }
+        // Above checks ensure this is safe.
+        Ok(unsafe{
+            JsonString::from_str_unchecked(s)
+        })
     }
 }
 
