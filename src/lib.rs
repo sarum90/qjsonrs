@@ -92,6 +92,7 @@ extern crate rand;
 mod buffer;
 mod decode;
 mod ring;
+mod sync;
 mod token;
 
 use crate::buffer::Buffer;
@@ -99,6 +100,7 @@ use crate::buffer::Buffer;
 use std::io::Read;
 use std::str;
 
+pub use crate::sync::{Stream};
 pub use crate::token::{JsonString, JsonToken};
 pub use crate::decode::{JsonDecoder, ConsumableBytes, DecodeError, DecodeResult};
 

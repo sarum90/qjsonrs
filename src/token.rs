@@ -30,6 +30,11 @@ impl<'a> JsonString<'a> {
         }
     }
 
+    /// Get the raw underlying str for this JsonString (no escapes will have been applied).
+    pub fn to_raw_str(self) -> &'a str {
+        self.raw
+    }
+
     /// Safely construct a JsonString from a raw string.
     pub fn from_str(s: &'a str) -> Result<JsonString<'a>, JsonStringParseError> {
         let mut i = s.chars();
