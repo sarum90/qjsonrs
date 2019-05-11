@@ -136,11 +136,6 @@ impl<'a> ConsumableBytes<'a> {
         self.bytes = &self.bytes[n..];
     }
 
-    /// Returns the slice of bytes that still remain in the ConsumableBytes.
-    pub fn remaining(&self) -> &'a [u8] {
-        return &self.bytes[..]
-    }
-
     fn expect_bytes(&mut self, bs: &[u8]) -> Result<(), DecodeError> {
         let len = bs.len();
         if self.bytes.len() >= len {
