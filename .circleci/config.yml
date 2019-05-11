@@ -3,21 +3,16 @@ jobs:
   build:
     docker:
       - image: circleci/rust:1.34.0
-
     steps:
       - checkout
-
-			- restore_cache:
-				  key: target
-
+      - restore_cache:
+          key: target
       - run:
           name: build
           command: cargo build
-
       - run:
           name: test
           command: cargo test
-
-			- save_cache:
-					paths:
-						- "./target"
+      - save_cache:
+          paths:
+            - "./target"
