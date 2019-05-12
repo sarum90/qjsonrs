@@ -49,6 +49,35 @@ NUMBER=$(jq -r .number "${PR_JSON_FILE}")
 BODY=$(jq -r .body "${PR_JSON_FILE}")
 BASE=$(jq -r .base.ref "${PR_JSON_FILE}")
 COMMIT_SHA=$(jq -r .head.sha "${PR_JSON_FILE}")
+
+truncate -s 0 "${COMMIT_EDIT_FILE}"
+echo "# Commit message for this merge. Generated from PR title / body." >> "${COMMIT_EDIT_FILE}"
+echo "# There will be a confirmation before merge is executed." >> "${COMMIT_EDIT_FILE}"
+echo "#" >> "${COMMIT_EDIT_FILE}"
+echo "# Note: if the merge fails for any reason this file will not be saved." >> "${COMMIT_EDIT_FILE}"
+echo "# Consider changing the description on Github rather than editing here." >> "${COMMIT_EDIT_FILE}"
+echo "${TITLE} (#${NUMBER})" >> "${COMMIT_EDIT_FILE}"
+echo >> "${COMMIT_EDIT_FILE}"
+echo "${BODY}" | fold -w 80 -s >> "${COMMIT_EDIT_FILE}"
+"${EDITOR}" "${COMMIT_EDIT_FILE}"
+grep -v '^#' "${COMMIT_EDIT_FILE}" > "${COMMIT_FILE}"
+if [[ -z $(cat "${COMMIT_FILE}" | tr -d '[:space:]') ]]; then
+  error "Aborting due to empty commit message"
+  exit -1
+fi
+
+echo "Merging with commit message:"
+echo "==="
+cat "${COMMIT_FILE}"
+echo "==="
+read -p "Are you sure [y/N]? " -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+  error "Exit on user request"
+  exit -1
+fi
+
 STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
 if [[ ${STATUS} == "pending" ]]; then
   echo "Current github status is pending."
@@ -72,30 +101,6 @@ if [[ ${STATUS} != "success" ]]; then
   exit -1
 fi
 
-truncate -s 0 "${COMMIT_EDIT_FILE}"
-echo "# Commit message for this merge. Generated from PR title / body." >> "${COMMIT_EDIT_FILE}"
-echo "# There will be a confirmation before merge is executed." >> "${COMMIT_EDIT_FILE}"
-echo "${TITLE} (#${NUMBER})" >> "${COMMIT_EDIT_FILE}"
-echo >> "${COMMIT_EDIT_FILE}"
-echo "${BODY}" | fold -w 80 -s >> "${COMMIT_EDIT_FILE}"
-"${EDITOR}" "${COMMIT_EDIT_FILE}"
-grep -v '^#' "${COMMIT_EDIT_FILE}" > "${COMMIT_FILE}"
-if [[ -z $(cat "${COMMIT_FILE}" | tr -d '[:space:]') ]]; then
-  error "Aborting due to empty commit message"
-  exit -1
-fi
-
-echo "Merging with commit message:"
-echo "==="
-cat "${COMMIT_FILE}"
-echo "==="
-read -p "Are you sure [y/N]? " -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]
-then
-  error "Exit on user request"
-  exit -1
-fi
 
 # Now we are changing working tree, be very explicit about it:
 set -x
