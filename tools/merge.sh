@@ -72,9 +72,9 @@ if [[ ${STATUS} != "success" ]]; then
 fi
 
 truncate -s 0 "${COMMIT_FILE}"
-echo "# Commit message for this merge. Generated from PR title / body."
-echo "# There will be a confirmation before merge is executed."
-echo "${TITLE} (\#${NUMBER})" >> "${COMMIT_FILE}"
+echo "# Commit message for this merge. Generated from PR title / body." >> "${COMMIT_FILE}"
+echo "# There will be a confirmation before merge is executed." >> "${COMMIT_FILE}"
+echo "${TITLE} (#${NUMBER})" >> "${COMMIT_FILE}"
 echo >> "${COMMIT_FILE}"
 echo "${BODY}" | fold -w 80 -s >> "${COMMIT_FILE}"
 "${EDITOR}" "${COMMIT_FILE}"
