@@ -15,19 +15,19 @@ if [[ -e "~/.gittoken" ]]; then
   CURL+="-u $(cat ~/.gittoken):"
 fi
 
-# if [[ -n $(git status -su) ]]; then
-#   error 'Current tree is dirty, aborting merge request.'
-#   git status
-#   exit -1
-# fi
-# 
-# git fetch
-# if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
-#   echo 'Current branch diverged from origin, aborting merge request.'
-#   git status
-#   exit -1
-# fi
-# 
+if [[ -n $(git status -su) ]]; then
+  error 'Current tree is dirty, aborting merge request.'
+  git status
+  exit -1
+fi
+
+git fetch
+if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
+  echo 'Current branch diverged from origin, aborting merge request.'
+  git status
+  exit -1
+fi
+
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 PULL_URL=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/pulls \
   | jq -r --arg branch "${BRANCH}" \
