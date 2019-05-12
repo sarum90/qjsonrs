@@ -58,8 +58,10 @@ if [[ ${STATUS} == "pending" ]]; then
     exit -1
   fi
   while [[ ${STATUS} == "pending" ]]; do
+    echo "Waiting 5 sec... (CTRL-C is safe to do whenever)"
     sleep 5
     STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
+    echo "New status: ${STATUS}"
   done
 fi
 
