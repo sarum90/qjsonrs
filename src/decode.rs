@@ -952,7 +952,6 @@ mod tests {
         compare_serde_with_qjsonrs("{\"one\": []}");
         compare_serde_with_qjsonrs("{ \"one\"  : {\"one\":{},\"two\":{\"12\":null}} }");
         compare_serde_with_qjsonrs("{\"a\": {} , \"one\": {\"[]\": [{}, null, {\"a\":[{}]}]}}");
-        panic!("hihi");
     }
 
     #[test]
