@@ -10,9 +10,11 @@ if [[ -n $(git status -s) ]]; then
 fi
 
 git fetch
-echo "HERE"
-git status -uno
-echo "DONE"
+if [[ -n $(git status -uno) ]]; then
+  echo 'Current branch diverged from origin, aborting merge request.'
+  git status
+  exit -1
+fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 PULL_URL=$(curl --silent https://api.github.com/repos/sarum90/qjsonrs/pulls \
