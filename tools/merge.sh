@@ -42,7 +42,8 @@ trap finish EXIT
 PR_JSON_FILE="${TMPDIR}/pr.json"
 ${CURL} "${PULL_URL}" > "${PR_JSON_FILE}"
 
-COMMIT_FILE="${TMPDIR}/COMMIT_EDITMSG"
+COMMIT_EDIT_FILE="${TMPDIR}/COMMIT_EDITMSG"
+COMMIT_FILE="${TMPDIR}/COMMIT"
 TITLE=$(jq -r .title "${PR_JSON_FILE}")
 NUMBER=$(jq -r .number "${PR_JSON_FILE}")
 BODY=$(jq -r .body "${PR_JSON_FILE}")
@@ -71,17 +72,19 @@ if [[ ${STATUS} != "success" ]]; then
   exit -1
 fi
 
-truncate -s 0 "${COMMIT_FILE}"
-echo "# Commit message for this merge. Generated from PR title / body." >> "${COMMIT_FILE}"
-echo "# There will be a confirmation before merge is executed." >> "${COMMIT_FILE}"
-echo "${TITLE} (#${NUMBER})" >> "${COMMIT_FILE}"
-echo >> "${COMMIT_FILE}"
-echo "${BODY}" | fold -w 80 -s >> "${COMMIT_FILE}"
-"${EDITOR}" "${COMMIT_FILE}"
-if [[ -z $(grep -v '^#' "${COMMIT_FILE}" | tr -d '[:space:]') ]]; then
+truncate -s 0 "${COMMIT_EDIT_FILE}"
+echo "# Commit message for this merge. Generated from PR title / body." >> "${COMMIT_EDIT_FILE}"
+echo "# There will be a confirmation before merge is executed." >> "${COMMIT_EDIT_FILE}"
+echo "${TITLE} (#${NUMBER})" >> "${COMMIT_EDIT_FILE}"
+echo >> "${COMMIT_EDIT_FILE}"
+echo "${BODY}" | fold -w 80 -s >> "${COMMIT_EDIT_FILE}"
+"${EDITOR}" "${COMMIT_EDIT_FILE}"
+grep -v '^#' "${COMMIT_EDIT_FILE}" > "${COMMIT_FILE}"
+if [[ -z $(cat "${COMMIT_FILE}" | tr -d '[:space:]') ]]; then
   error "Aborting due to empty commit message"
   exit -1
 fi
+
 echo "Merging with commit message:"
 echo "==="
 cat "${COMMIT_FILE}"
@@ -101,4 +104,4 @@ git checkout "${BASE}"
 git pull origin
 git merge --squash --no-commit  "${BRANCH}"
 git commit -F "${COMMIT_FILE}"
-# git push origin
+git push origin
