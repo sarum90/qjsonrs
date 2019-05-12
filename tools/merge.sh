@@ -10,7 +10,7 @@ if [[ -n $(git status -s) ]]; then
 fi
 
 git fetch
-if [[ -n $(git status -uno) ]]; then
+if [[ -n $(git status -suno) ]]; then
   echo 'Current branch diverged from origin, aborting merge request.'
   git status
   exit -1
