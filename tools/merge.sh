@@ -97,8 +97,8 @@ fi
 # Now we are changing working tree, be very explicit about it:
 set -x
 
-git checkout ${BASE}
+git checkout "${BASE}"
 git pull origin
-git merge --squash --no-commit
+git merge --squash --no-commit  "${BRANCH}"
 git commit -F "${COMMIT_FILE}"
 # git push origin
