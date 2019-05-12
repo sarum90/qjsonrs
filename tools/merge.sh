@@ -44,10 +44,10 @@ ${CURL} "${PULL_URL}" > "${PR_JSON_FILE}"
 
 COMMIT_FILE="${TMPDIR}/COMMIT_EDITMSG"
 TITLE=$(jq -r .title "${PR_JSON_FILE}")
+NUMBER=$(jq -r .number "${PR_JSON_FILE}")
 BODY=$(jq -r .body "${PR_JSON_FILE}")
 BASE=$(jq -r .base.ref "${PR_JSON_FILE}")
 COMMIT_SHA=$(jq -r .head.sha "${PR_JSON_FILE}")
-echo here
 STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
 if [[ ${STATUS} == "pending" ]]; then
   echo "Current github status is pending."
@@ -72,7 +72,9 @@ if [[ ${STATUS} != "success" ]]; then
 fi
 
 truncate -s 0 "${COMMIT_FILE}"
-echo "${TITLE}" >> "${COMMIT_FILE}"
+echo "# Commit message for this merge. Generated from PR title / body."
+echo "# There will be a confirmation before merge is executed."
+echo "${TITLE} (\#${NUMBER})" >> "${COMMIT_FILE}"
 echo >> "${COMMIT_FILE}"
 echo "${BODY}" | fold -w 80 -s >> "${COMMIT_FILE}"
 "${EDITOR}" "${COMMIT_FILE}"
