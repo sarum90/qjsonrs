@@ -3,14 +3,14 @@
 set -e
 set -u
 
-if [[ -n $(git status -s) ]]; then
+if [[ -n $(git status -su) ]]; then
   echo 'Current tree is dirty, aborting merge request.'
   git status
   exit -1
 fi
 
 git fetch
-if [[ -n $(git status -suno) ]]; then
+if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
   echo 'Current branch diverged from origin, aborting merge request.'
   git status
   exit -1
