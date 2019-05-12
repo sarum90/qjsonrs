@@ -10,7 +10,7 @@ if [[ -n $(git status -s) ]]; then
 fi
 
 git fetch
-git status
+git status -uno
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 PULL_URL=$(curl --silent https://api.github.com/repos/sarum90/qjsonrs/pulls \
