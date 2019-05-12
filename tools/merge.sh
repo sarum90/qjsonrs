@@ -23,7 +23,7 @@ fi
 
 git fetch
 if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
-  echo 'Current branch diverged from origin, aborting merge request.'
+  error 'Current branch diverged from origin, aborting merge request.'
   git status
   exit -1
 fi
