@@ -1,11 +1,12 @@
 [package]
 name = "qjsonrs"
-version = "0.1.0"
+version = "0.1.0-dev"
 authors = ["Marcus Ewert <marcus.ewert@mixpanel.com>"]
 license = "MIT"
 edition = "2018"
 description = "Streaming JSON Tokenizer."
 repository = "https://github.com/sarum90/qjsonrs"
+readme = "README.md"
 
 [dependencies]
 libc = "0.2"
