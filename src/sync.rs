@@ -33,13 +33,13 @@ pub trait TokenIterator {
     fn advance(&mut self) -> Result<(), Error>;
 
     /// Get the current token, or None if the stream is exhausted.
-    fn get<'a>(&'a self) -> Option<JsonToken<'a>>;
+    fn get(&self) -> Option<JsonToken<'_>>;
 
     /// Advance to the next token, then get the current token.
     ///
     ///
     /// Implemented as a call to `advance()` and then `get()`
-    fn next<'a>(&'a mut self) -> Result<Option<JsonToken<'a>>, Error> {
+    fn next(&mut self) -> Result<Option<JsonToken<'_>>, Error> {
         self.advance()?;
         Ok(self.get())
     }
@@ -99,8 +99,8 @@ impl DerefJsonToken {
             JsonToken::JsNull => DerefJsonToken::JsNull,
             JsonToken::JsBoolean(b) => DerefJsonToken::JsBoolean(b),
             JsonToken::JsNumber(s) => DerefJsonToken::JsNumber(Slice::new(buffer, s)),
-            JsonToken::JsString(s) => DerefJsonToken::JsString(Slice::new(buffer, s.to_raw_str())),
-            JsonToken::JsKey(s) => DerefJsonToken::JsKey(Slice::new(buffer, s.to_raw_str())),
+            JsonToken::JsString(s) => DerefJsonToken::JsString(Slice::new(buffer, s.into_raw_str())),
+            JsonToken::JsKey(s) => DerefJsonToken::JsKey(Slice::new(buffer, s.into_raw_str())),
         }
     }
 
@@ -174,12 +174,13 @@ impl<'a, 'b> ConsumeableByteAdvance<'a, 'b> {
 impl<R> TokenIterator for Stream<R> where R: Read {
     /// Advance to the next token.
     fn advance(&mut self) -> Result<(), Error> {
+        println!("advancing...");
         self.curr_token = self.advance_impl()?;
         Ok(())
     }
 
     /// Get the current token, or None if the stream is exhausted.
-    fn get<'a>(&'a self) -> Option<JsonToken<'a>> {
+    fn get(&self) -> Option<JsonToken<'_>> {
         let b = &self.buffer[..];
         // reref is okay because every time buffer is changed, curr_token is updated.
         //
@@ -233,7 +234,7 @@ impl<R> Stream<R> where R: Read {
             }
             let bytes = &mut self.buffer[self.indices.scanned..];
             assert!(
-                bytes.len() > 0,
+                !bytes.is_empty(),
                 "Need to add shuffling / compacting: {:?}, {:?}", self.indices, self.buffer.len()
             );
             let n = self.src.read(bytes)?;
@@ -248,20 +249,20 @@ impl<R> Stream<R> where R: Read {
     fn decode<'a>(buffer: &'a [u8], eof: bool, indices: &mut StreamIndices, decoder: &mut JsonDecoder) -> Result<Option<JsonToken<'a>>, Error> {
         let mut cb = ConsumeableByteAdvance::new(indices, eof, buffer);
         let r = decoder.decode(cb.bytes());
-        match r {
-            Err(DecodeError::NeedsMore) => {
-                cb.scanned_to_end()
-            },
-            _ => {},
+        if let Err(DecodeError::NeedsMore) = r {
+            cb.scanned_to_end()
         }
         Ok(r?)
     }
 
     fn advance_impl(&mut self) -> Result<Option<DerefJsonToken>, Error> {
         loop {
+            println!("ensuring bytes...");
             self.ensure_bytes()?;
             match Self::decode(&self.buffer[..], self.seen_eof, &mut self.indices, &mut self.decoder) {
-                Err(Error::DecodeError(DecodeError::NeedsMore)) => {},
+                Err(Error::DecodeError(DecodeError::NeedsMore)) => {
+                    assert!(!self.seen_eof, "Cannot return NeedsMore if we've seen eof.");
+                },
                 n => {return n.map(|o| o.map(|t| DerefJsonToken::new(t, &self.buffer[..])));},
             }
         }
@@ -302,7 +303,7 @@ mod test {
         let mut s = Stream::from_read_with_initial_capacity(bytes, 10).unwrap();
         assert_eq!(JsonToken::StartArray, s.next().unwrap().unwrap());
         assert_eq!(
-            JsonToken::JsString(JsonString::from_str("1234567890123456789").unwrap()),
+            JsonToken::JsString(JsonString::from_str_ref("1234567890123456789").unwrap()),
             s.next().unwrap().unwrap()
         );
         assert_eq!(JsonToken::JsNull, s.next().unwrap().unwrap());

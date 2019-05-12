@@ -1,4 +1,3 @@
-
 /// A raw JSON string (with escapes).
 #[derive(Debug, PartialEq)]
 pub struct JsonString<'a> {
@@ -31,12 +30,12 @@ impl<'a> JsonString<'a> {
     }
 
     /// Get the raw underlying str for this JsonString (no escapes will have been applied).
-    pub fn to_raw_str(self) -> &'a str {
+    pub fn into_raw_str(self) -> &'a str {
         self.raw
     }
 
     /// Safely construct a JsonString from a raw string.
-    pub fn from_str(s: &'a str) -> Result<JsonString<'a>, JsonStringParseError> {
+    pub fn from_str_ref(s: &'a str) -> Result<JsonString<'a>, JsonStringParseError> {
         let mut i = s.chars();
         while let Some(c) = i.next() {
             match (c, is_json_control(c)) {
@@ -60,7 +59,7 @@ impl<'a> JsonString<'a> {
                                 .take(4)
                                 .inspect(|d| {
                                     cnt += 1;
-                                    ch = ch << 4;
+                                    ch <<= 4;
                                     ch += d.to_digit(16).unwrap_or(0);
                                 })
                                 .skip_while(|c| c.is_digit(16));
@@ -104,14 +103,14 @@ unsafe fn unescape(s: &str) -> String {
             let c = chs.next().expect("unescape off end of string.");
             res.push(match c {
                 'u' => {
-                    let a = chs.next().expect("unescape unicode off end of string.");
-                    let b = chs.next().expect("unescape unicode off end of string.");
-                    let c = chs.next().expect("unescape unicode off end of string.");
-                    let d = chs.next().expect("unescape unicode off end of string.");
-                    let num = ((a.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
-                        ((b.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 8) +
-                        ((c.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 4) +
-                        (d.to_digit(16).expect("Bad hex digit in \\u escape") as u32);
+                    let high_nibble = chs.next().expect("unescape unicode off end of string.");
+                    let high_mid_nibble = chs.next().expect("unescape unicode off end of string.");
+                    let low_mid_nibble = chs.next().expect("unescape unicode off end of string.");
+                    let low_nibble = chs.next().expect("unescape unicode off end of string.");
+                    let num = ((high_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
+                        ((high_mid_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 8) +
+                        ((low_mid_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 4) +
+                        (low_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32);
                     std::char::from_u32(num).expect("Bad UTF-8 character in escape sequence")
                 },
                 '"' => '"',
@@ -135,7 +134,7 @@ impl Into<String> for JsonString<'_> {
     fn into(self) -> String {
         // self.raw must be a valid set of escaped JSON string utf-8 bytes.
         unsafe {
-            unescape(self.raw.into())
+            unescape(self.raw)
         }
     }
 }

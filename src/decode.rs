@@ -171,7 +171,7 @@ impl<'a> ConsumableBytes<'a> {
     }
 
     fn next(&self) -> Option<u8> {
-        self.bytes.iter().next().map(|c| *c)
+        self.bytes.iter().next().cloned()
     }
 
     fn consume_next(&mut self) -> ConsumeResult<u8> {
@@ -179,12 +179,10 @@ impl<'a> ConsumableBytes<'a> {
         if r.is_some() {
             self.consume_bytes(1);
             ConsumeResult::Consumed(r.unwrap())
-        } else {
-            if self.end_of_stream {
+        } else if self.end_of_stream {
                 ConsumeResult::EndOfStream
-            } else {
-                ConsumeResult::EndOfChunk
-            }
+        } else {
+            ConsumeResult::EndOfChunk
         }
     }
 
@@ -310,7 +308,7 @@ impl JsonDecoder {
             match r {
                 Some((q, _)) => {
                     let pref = &bytes.bytes[i..i+q];
-                    let bs_count = if pref.len() > 0 {
+                    let bs_count = if !pref.is_empty() {
                         let non_bs = pref.iter().enumerate().rfind(|(_, x)| **x != b'\\');
                         let (non_bs_idx, _) = non_bs.map(|(x, c)| (x+1, c)).unwrap_or((0, &0));
                         pref.len() - non_bs_idx
@@ -332,10 +330,10 @@ impl JsonDecoder {
         }
 
         match e {
-            Some(l) => {
-                let s = str::from_utf8(&bytes.bytes[1..l+1])?;
-                bytes.consume_bytes(l+2);
-                Ok(match JsonString::from_str(s) {
+            Some(length) => {
+                let string = str::from_utf8(&bytes.bytes[1..=length])?;
+                bytes.consume_bytes(length+2);
+                Ok(match JsonString::from_str_ref(string) {
                     Ok(t) => t,
                     Err(JsonStringParseError::UnexpectedByte(b)) => {return Err(DecodeError::UnexpectedByte(b));},
                     Err(JsonStringParseError::BadUnicodeEscape(u)) => {return Err(DecodeError::InvalidUnicodeEscape(u));},
@@ -396,10 +394,10 @@ impl JsonDecoder {
             },
             Some(c) => Err(DecodeError::UnexpectedByte(c)),
             None => {
-                if self.stack.len() > 0 {
-                    Err(DecodeError::NeedsMore)
-                } else {
+                if self.stack.is_empty() {
                     Ok(None)
+                } else {
+                    Err(DecodeError::NeedsMore)
                 }
             },
         }
@@ -414,6 +412,15 @@ impl JsonDecoder {
     ///  
     ///  If this is not done, it is highly likely this function will panic on next invocation.
     pub fn decode<'a>(&mut self, bytes: &mut ConsumableBytes<'a>) -> DecodeResult<'a> {
+        let r = self.decode_impl(bytes);
+        if let (Err(DecodeError::NeedsMore), true) = (&r, bytes.end_of_stream) {
+            Err(DecodeError::UnexpectedEndOfStream)
+        } else {
+            r
+        }
+    }
+
+    fn decode_impl<'a>(&mut self, bytes: &mut ConsumableBytes<'a>) -> DecodeResult<'a> {
         bytes.consume_ws();
         match (self.stack.last(), &self.previous) {
             (Some(Context::Object), TokenType::ObjectComma) => {
@@ -792,7 +799,7 @@ mod tests {
         let mut decoder = JsonDecoder::new();
         let mut scb = SyncConsumableBytes::new_non_incremental(input.as_bytes());
         let mut c = Cursor::new(input.as_bytes());
-        let v: Result<Value, _> = dbg!(from_reader(&mut c));
+        let v: Result<Value, _> = from_reader(&mut c);
         match v.map(normalize_value) {
             Ok(serde) => {
                 let qjsonrs = normalize_value(consume_value_impl2(&mut decoder, &mut scb).expect("Should be successful since serde was successful.").unwrap());
