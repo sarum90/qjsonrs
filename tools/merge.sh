@@ -66,7 +66,7 @@ echo "Merging with commit message:"
 echo "==="
 cat "${COMMIT_FILE}"
 echo "==="
-read -p "Are you sure [y/Nn]? " -n 1 -r
+read -p "Are you sure [y/N]? " -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]
 then
@@ -75,6 +75,7 @@ then
 fi
 
 git checkout ${BASE}
-git merge --squash -F "${COMMIT_FILE}"
-
-# TODO... actually merge...
+git pull origin
+git merge --squash --no-commit
+git commit -F "${COMMIT_FILE}"
+# git push origin
