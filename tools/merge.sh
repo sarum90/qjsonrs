@@ -11,8 +11,8 @@ function error {
 
 CURL="curl --fail --show-error --silent"
 
-if [[ -e "~/.gittoken" ]]; then
-  CURL+="-u $(cat ~/.gittoken):"
+if [[ -e ~/.gittoken ]]; then
+  CURL+=" -u $(cat ~/.gittoken):"
 fi
 
 if [[ -n $(git status -su) ]]; then
@@ -47,6 +47,7 @@ TITLE=$(jq -r .title "${PR_JSON_FILE}")
 BODY=$(jq -r .body "${PR_JSON_FILE}")
 BASE=$(jq -r .base.ref "${PR_JSON_FILE}")
 COMMIT_SHA=$(jq -r .head.sha "${PR_JSON_FILE}")
+echo here
 STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
 if [[ ${STATUS} == "pending" ]]; then
   echo "Current github status is pending."
@@ -90,6 +91,9 @@ then
   error "Exit on user request"
   exit -1
 fi
+
+# Now we are changing working tree, be very explicit about it:
+set -x
 
 git checkout ${BASE}
 git pull origin
