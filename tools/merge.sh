@@ -48,6 +48,21 @@ BODY=$(jq -r .body "${PR_JSON_FILE}")
 BASE=$(jq -r .base.ref "${PR_JSON_FILE}")
 COMMIT_SHA=$(jq -r .head.sha "${PR_JSON_FILE}")
 STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
+if [[ ${STATUS} == "pending" ]]; then
+  echo "Current github status is pending."
+  read -p "Do you want to wait til that completes [y/N]? " -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]
+  then
+    error "Will not merge pending branch"
+    exit -1
+  fi
+  while [[ ${STATUS} == "pending" ]]; do
+    sleep 5
+    STATUS=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/commits/${COMMIT_SHA}/status | jq -r '.state')
+  done
+fi
+
 if [[ ${STATUS} != "success" ]]; then
   error "Will not merge commit with status ${STATUS}, must be success"
   exit -1
