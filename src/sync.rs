@@ -174,7 +174,6 @@ impl<'a, 'b> ConsumeableByteAdvance<'a, 'b> {
 impl<R> TokenIterator for Stream<R> where R: Read {
     /// Advance to the next token.
     fn advance(&mut self) -> Result<(), Error> {
-        println!("advancing...");
         self.curr_token = self.advance_impl()?;
         Ok(())
     }
@@ -257,7 +256,6 @@ impl<R> Stream<R> where R: Read {
 
     fn advance_impl(&mut self) -> Result<Option<DerefJsonToken>, Error> {
         loop {
-            println!("ensuring bytes...");
             self.ensure_bytes()?;
             match Self::decode(&self.buffer[..], self.seen_eof, &mut self.indices, &mut self.decoder) {
                 Err(Error::DecodeError(DecodeError::NeedsMore)) => {
