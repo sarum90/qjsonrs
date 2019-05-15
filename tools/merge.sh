@@ -41,6 +41,8 @@ PULL_URL=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/pulls \
 
 if [[ ${PULL_URL} == "" ]]; then
   error 'Could not find pull request based on this branch.'
+  echo
+  echo "Visit: https://github.com/sarum90/qjsonrs/pull/new/${BRANCH} to create one."
   exit -1
 fi
 
