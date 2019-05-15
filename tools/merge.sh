@@ -29,9 +29,22 @@ if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
 fi
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ ${BRANCH} == "master" ]]; then
+  error 'Refusing to attempt to merge master into master.'
+  exit -1
+fi
+
+
 PULL_URL=$(${CURL} https://api.github.com/repos/sarum90/qjsonrs/pulls \
   | jq -r --arg branch "${BRANCH}" \
   '.[] | {url: .url, branch: .head.ref} | select(.branch == $branch) | .url')
+
+if [[ ${PULL_URL} == "" ]]; then
+  error 'Could not find pull request based on this branch.'
+  echo
+  echo "Visit: https://github.com/sarum90/qjsonrs/pull/new/${BRANCH} to create one."
+  exit -1
+fi
 
 TMPDIR=$(mktemp -d)
 function finish {
@@ -110,3 +123,5 @@ git pull origin
 git merge --squash --no-commit  "${BRANCH}"
 git commit -F "${COMMIT_FILE}"
 git push origin
+git push origin ":${BRANCH}"
+git branch -D "${BRANCH}"
