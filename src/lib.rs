@@ -91,8 +91,6 @@
 #[cfg(test)] #[macro_use] extern crate matches;
 #[cfg(test)] #[macro_use] extern crate serde_json;
 #[cfg(test)]  extern crate os_pipe;
-extern crate libc;
-extern crate rand;
 
 mod decode;
 mod token;
