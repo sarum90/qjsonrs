@@ -415,6 +415,8 @@ impl JsonDecoder {
         let r = self.decode_impl(bytes);
         if let (Err(DecodeError::NeedsMore), true) = (&r, bytes.end_of_stream) {
             Err(DecodeError::UnexpectedEndOfStream)
+        } else if let (Ok(None), false) = (&r, bytes.end_of_stream) {
+            Err(DecodeError::NeedsMore)
         } else {
             r
         }
