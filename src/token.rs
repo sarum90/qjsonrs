@@ -16,7 +16,6 @@ fn is_json_control(c: char) -> bool {
 }
 
 impl<'a> JsonString<'a> {
-
     // TODO: expose a safe version that errors out if str is an invalid json string (bad escape
     // code, newlines, NULL).
     /// Unsafely construct a JsonString from a raw str.
@@ -24,9 +23,7 @@ impl<'a> JsonString<'a> {
     /// unsafe because it assumes `s` is a valid JSON string (all control chars escaped, no invalid
     /// escapes, no un-escaped '"')
     pub unsafe fn from_str_unchecked(s: &'a str) -> JsonString<'a> {
-        JsonString{
-            raw: s
-        }
+        JsonString { raw: s }
     }
 
     /// Get the raw underlying str for this JsonString (no escapes will have been applied).
@@ -43,55 +40,51 @@ impl<'a> JsonString<'a> {
                     let mut bytes = [0, 0, 0, 0];
                     c.encode_utf8(&mut bytes[..]);
                     return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
-                },
-                ('\\', _) => {
-                    match i.next() {
-                        None => {
+                }
+                ('\\', _) => match i.next() {
+                    None => {
+                        return Err(JsonStringParseError::EarlyTermination);
+                    }
+                    Some('n') | Some('f') | Some('r') | Some('t') | Some('b') | Some('\\')
+                    | Some('"') | Some('/') => {}
+                    Some('u') => {
+                        let mut cnt = 0;
+                        let mut ch: u32 = 0;
+                        let mut b = i
+                            .by_ref()
+                            .take(4)
+                            .inspect(|d| {
+                                cnt += 1;
+                                ch <<= 4;
+                                ch += d.to_digit(16).unwrap_or(0);
+                            })
+                            .skip_while(|c| c.is_digit(16));
+                        match b.next() {
+                            None => {}
+                            Some(c2) => {
+                                let mut bytes = [0, 0, 0, 0];
+                                c2.encode_utf8(&mut bytes[..]);
+                                return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
+                            }
+                        }
+                        if cnt < 4 {
                             return Err(JsonStringParseError::EarlyTermination);
-                        },
-                        Some('n') | Some('f') | Some('r') | Some('t') | Some('b') | Some('\\') | Some('"') | Some('/') => {
-                        },
-                        Some('u') => {
-                            let mut cnt = 0;
-                            let mut ch: u32 = 0;
-                            let mut b = i
-                                .by_ref()
-                                .take(4)
-                                .inspect(|d| {
-                                    cnt += 1;
-                                    ch <<= 4;
-                                    ch += d.to_digit(16).unwrap_or(0);
-                                })
-                                .skip_while(|c| c.is_digit(16));
-                            match b.next() {
-                                None => {},
-                                Some(c2) => {
-                                    let mut bytes = [0, 0, 0, 0];
-                                    c2.encode_utf8(&mut bytes[..]);
-                                    return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
-                                },
-                            }
-                            if cnt < 4 {
-                                return Err(JsonStringParseError::EarlyTermination);
-                            }
-                            if std::char::from_u32(ch).is_none() {
-                                return Err(JsonStringParseError::BadUnicodeEscape(ch));
-                            }
-                        },
-                        Some(c2) => {
-                            let mut bytes = [0, 0, 0, 0];
-                            c2.encode_utf8(&mut bytes[..]);
-                            return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
-                        },
+                        }
+                        if std::char::from_u32(ch).is_none() {
+                            return Err(JsonStringParseError::BadUnicodeEscape(ch));
+                        }
+                    }
+                    Some(c2) => {
+                        let mut bytes = [0, 0, 0, 0];
+                        c2.encode_utf8(&mut bytes[..]);
+                        return Err(JsonStringParseError::UnexpectedByte(bytes[0]));
                     }
                 },
-                (_, _) => {},
+                (_, _) => {}
             }
         }
         // Above checks ensure this is safe.
-        Ok(unsafe{
-            JsonString::from_str_unchecked(s)
-        })
+        Ok(unsafe { JsonString::from_str_unchecked(s) })
     }
 }
 
@@ -107,12 +100,27 @@ unsafe fn unescape(s: &str) -> String {
                     let high_mid_nibble = chs.next().expect("unescape unicode off end of string.");
                     let low_mid_nibble = chs.next().expect("unescape unicode off end of string.");
                     let low_nibble = chs.next().expect("unescape unicode off end of string.");
-                    let num = ((high_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 12) +
-                        ((high_mid_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 8) +
-                        ((low_mid_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32) << 4) +
-                        (low_nibble.to_digit(16).expect("Bad hex digit in \\u escape") as u32);
+                    let num = ((high_nibble
+                        .to_digit(16)
+                        .expect("Bad hex digit in \\u escape")
+                        as u32)
+                        << 12)
+                        + ((high_mid_nibble
+                            .to_digit(16)
+                            .expect("Bad hex digit in \\u escape")
+                            as u32)
+                            << 8)
+                        + ((low_mid_nibble
+                            .to_digit(16)
+                            .expect("Bad hex digit in \\u escape")
+                            as u32)
+                            << 4)
+                        + (low_nibble
+                            .to_digit(16)
+                            .expect("Bad hex digit in \\u escape")
+                            as u32);
                     std::char::from_u32(num).expect("Bad UTF-8 character in escape sequence")
-                },
+                }
                 '"' => '"',
                 'n' => '\n',
                 '\\' => '\\',
@@ -126,16 +134,14 @@ unsafe fn unescape(s: &str) -> String {
         } else {
             res.push(c);
         }
-    };
+    }
     res
 }
 
 impl Into<String> for JsonString<'_> {
     fn into(self) -> String {
         // self.raw must be a valid set of escaped JSON string utf-8 bytes.
-        unsafe {
-            unescape(self.raw)
-        }
+        unsafe { unescape(self.raw) }
     }
 }
 
