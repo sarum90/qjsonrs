@@ -11,7 +11,7 @@ jobs:
           key: cargo
       - run:
           name: Install tools
-          command: which cargo && rustup install rustfmt
+          command: which cargo && rustup component add rustfmt
       - save_cache:
           # TODO: consider only saving part of target, or making the key a function of Cargo.lock.
           key: "cargo"
