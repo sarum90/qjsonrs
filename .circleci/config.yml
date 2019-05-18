@@ -2,11 +2,21 @@ version: 2
 jobs:
   build:
     docker:
-      - image: circleci/rust:1.34.0
+      - image: circleci/rust:1.34.2
     steps:
       - run:
           name: Version information
           command: rustc --version; cargo --version; rustup --version
+      - restore_cache:
+          key: cargo
+      - run:
+          name: Install tools
+          command: which cargo && rustup install rustfmt
+      - save_cache:
+          # TODO: consider only saving part of target, or making the key a function of Cargo.lock.
+          key: "cargo"
+          paths:
+            - "~/.cargo"
       - checkout
       - restore_cache:
           key: target
