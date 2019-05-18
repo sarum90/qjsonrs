@@ -11,6 +11,9 @@ jobs:
       - restore_cache:
           key: target
       - run:
+          name: format
+          command: cargo fmt && git diff --exit-code
+      - run:
           name: build
           command: cargo build
       - run:
