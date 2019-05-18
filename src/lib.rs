@@ -87,10 +87,17 @@
 //! # }
 //!
 
-#[cfg(test)] #[macro_use] extern crate hamcrest2;
-#[cfg(test)] #[macro_use] extern crate matches;
-#[cfg(test)] #[macro_use] extern crate serde_json;
-#[cfg(test)]  extern crate os_pipe;
+#[cfg(test)]
+#[macro_use]
+extern crate hamcrest2;
+#[cfg(test)]
+#[macro_use]
+extern crate matches;
+#[cfg(test)]
+#[macro_use]
+extern crate serde_json;
+#[cfg(test)]
+extern crate os_pipe;
 
 mod decode;
 mod token;
@@ -100,10 +107,10 @@ pub use crate::token::{JsonString, JsonToken};
 
 #[cfg(test)]
 mod tests {
-    use hamcrest2::prelude::*;
     use super::sync::{Stream, TokenIterator};
-    use super::{JsonToken, JsonString};
-    use serde_json::{Value, Map, Number};
+    use super::{JsonString, JsonToken};
+    use hamcrest2::prelude::*;
+    use serde_json::{Map, Number, Value};
     use std::io::Read;
     use std::str::FromStr;
 
@@ -116,52 +123,51 @@ mod tests {
     fn consume_value_checked<R: Read>(stream: &mut Stream<R>) -> ConsumedValue {
         let tok = stream.next().unwrap().unwrap();
         match tok {
-            JsonToken::JsNull => {ConsumedValue::Value(Value::Null)},
-            JsonToken::JsBoolean(b) => {ConsumedValue::Value(Value::Bool(b))},
-            JsonToken::JsNumber(s) => {
-                ConsumedValue::Value(
-                    Value::Number(
-                        Number::from_str(s).expect("Should be able to read JSON number from string.")
-                    )
-                )
-            },
-            JsonToken::JsString(jsstr) => {ConsumedValue::Value(Value::String(jsstr.into()))},
+            JsonToken::JsNull => ConsumedValue::Value(Value::Null),
+            JsonToken::JsBoolean(b) => ConsumedValue::Value(Value::Bool(b)),
+            JsonToken::JsNumber(s) => ConsumedValue::Value(Value::Number(
+                Number::from_str(s).expect("Should be able to read JSON number from string."),
+            )),
+            JsonToken::JsString(jsstr) => ConsumedValue::Value(Value::String(jsstr.into())),
             JsonToken::StartArray => {
                 let mut res = vec![];
                 loop {
                     match consume_value_checked(stream) {
                         ConsumedValue::Value(v) => {
                             res.push(v);
-                        },
+                        }
                         ConsumedValue::EndArray => {
                             break;
                         }
                     }
                 }
                 ConsumedValue::Value(Value::Array(res))
-            },
-            JsonToken::EndArray => { ConsumedValue::EndArray },
+            }
+            JsonToken::EndArray => ConsumedValue::EndArray,
             JsonToken::StartObject => {
                 let mut res = Map::new();
                 loop {
                     match stream.next().unwrap() {
                         Some(JsonToken::JsKey(k)) => {
                             res.insert(k.into(), consume_value(stream));
-                        },
+                        }
                         Some(JsonToken::EndObject) => {
                             break;
-                        },
-                        t => { panic!("Unexpected token while parsing objects: {:?}", t); }
+                        }
+                        t => {
+                            panic!("Unexpected token while parsing objects: {:?}", t);
+                        }
                     }
                 }
                 ConsumedValue::Value(Value::Object(res))
-            },
-            unexp => { panic!("Unexpected js token {:?}", unexp); },
+            }
+            unexp => {
+                panic!("Unexpected js token {:?}", unexp);
+            }
         }
     }
 
-    fn consume_value<R: Read>(stream: &mut Stream<R>) -> Value 
-    {
+    fn consume_value<R: Read>(stream: &mut Stream<R>) -> Value {
         let res = consume_value_checked(stream);
         if let ConsumedValue::Value(v) = res {
             v
@@ -186,12 +192,10 @@ mod tests {
                 let qjsonrs = normalize_value(consume_value(&mut stream));
                 assert_that!(qjsonrs, eq(serde));
                 assert_that!(stream.next().unwrap(), none());
-            },
-            Err(_) => {
-                match stream.next() {
-                    Ok(_) => assert_that!(stream.next(), err()),
-                    Err(_)  => {}
-                }
+            }
+            Err(_) => match stream.next() {
+                Ok(_) => assert_that!(stream.next(), err()),
+                Err(_) => {}
             },
         }
     }
@@ -199,7 +203,12 @@ mod tests {
     #[test]
     fn simple_string() {
         let mut stream = Stream::from_read(&b"\"my string\""[..]).unwrap();
-        assert_that!(stream.next().unwrap().unwrap(), eq(JsonToken::JsString(JsonString::from_str_ref("my string").unwrap())));
+        assert_that!(
+            stream.next().unwrap().unwrap(),
+            eq(JsonToken::JsString(
+                JsonString::from_str_ref("my string").unwrap()
+            ))
+        );
         assert_that!(stream.next().unwrap(), none());
     }
 
@@ -233,7 +242,7 @@ mod tests {
     #[test]
     fn string_spanning_buffers() {
         let size = 4096;
-        let s = (0..size-3).map(|_| ' ').collect::<String>();
+        let s = (0..size - 3).map(|_| ' ').collect::<String>();
         let input = s + "\"1234567890\"";
         compare_serde_with_qjsonrs(&input);
     }
