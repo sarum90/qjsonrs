@@ -180,9 +180,9 @@ impl<'a> ConsumableBytes<'a> {
 
     fn consume_next(&mut self) -> ConsumeResult<u8> {
         let r = self.next();
-        if r.is_some() {
+        if let Some(unwrapped_r) = r {
             self.consume_bytes(1);
-            ConsumeResult::Consumed(r.unwrap())
+            ConsumeResult::Consumed(unwrapped_r)
         } else if self.end_of_stream {
             ConsumeResult::EndOfStream
         } else {
@@ -192,7 +192,7 @@ impl<'a> ConsumableBytes<'a> {
 
     fn unsigned_number(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            ConsumeResult::Consumed(b'1'...b'9') => Ok(self.int_digits()? + 1),
+            ConsumeResult::Consumed(b'1'..=b'9') => Ok(self.int_digits()? + 1),
             ConsumeResult::Consumed(b'0') => Ok(self.decimal_point()? + 1),
             ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
             ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
@@ -202,7 +202,7 @@ impl<'a> ConsumableBytes<'a> {
 
     fn fraction_first_digit(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            ConsumeResult::Consumed(b'0'...b'9') => Ok(self.fraction_digits()? + 1),
+            ConsumeResult::Consumed(b'0'..=b'9') => Ok(self.fraction_digits()? + 1),
             ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
             ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
             ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
@@ -213,7 +213,7 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                ConsumeResult::Consumed(b'0'...b'9') => i += 1,
+                ConsumeResult::Consumed(b'0'..=b'9') => i += 1,
                 ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => {
                     return Ok(self.exp()? + i + 1)
                 }
@@ -226,7 +226,7 @@ impl<'a> ConsumableBytes<'a> {
 
     fn exp_first_digit(&mut self) -> Result<NumberLength, DecodeError> {
         match self.consume_next() {
-            ConsumeResult::Consumed(b'0'...b'9') => Ok(self.exp_digits()? + 1),
+            ConsumeResult::Consumed(b'0'..=b'9') => Ok(self.exp_digits()? + 1),
             ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
             ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
             ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
@@ -237,7 +237,7 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                ConsumeResult::Consumed(b'0'...b'9') => {
+                ConsumeResult::Consumed(b'0'..=b'9') => {
                     i += 1;
                 }
                 ConsumeResult::Consumed(_) => return Ok(i.into()),
@@ -252,7 +252,7 @@ impl<'a> ConsumableBytes<'a> {
             ConsumeResult::Consumed(b'+') | ConsumeResult::Consumed(b'-') => {
                 Ok(self.exp_first_digit()? + 1)
             }
-            ConsumeResult::Consumed(b'0'...b'9') => Ok(self.exp_digits()? + 1),
+            ConsumeResult::Consumed(b'0'..=b'9') => Ok(self.exp_digits()? + 1),
             ConsumeResult::Consumed(c) => Err(DecodeError::UnexpectedByte(c)),
             ConsumeResult::EndOfStream => Err(DecodeError::UnexpectedEndOfStream),
             ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
@@ -264,7 +264,7 @@ impl<'a> ConsumableBytes<'a> {
         match c {
             ConsumeResult::Consumed(b'.') => Ok(self.fraction_first_digit()? + 1),
             ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => Ok(self.exp()? + 1),
-            ConsumeResult::Consumed(b'0'...b'9') => Err(DecodeError::UnexpectedByte(c.unwrap())),
+            ConsumeResult::Consumed(b'0'..=b'9') => Err(DecodeError::UnexpectedByte(c.unwrap())),
             ConsumeResult::Consumed(_) => Ok(0.into()),
             ConsumeResult::EndOfStream => Ok(0.into()),
             ConsumeResult::EndOfChunk => Err(DecodeError::NeedsMore),
@@ -275,7 +275,7 @@ impl<'a> ConsumableBytes<'a> {
         let mut i = 0;
         loop {
             match self.consume_next() {
-                ConsumeResult::Consumed(b'0'...b'9') => i += 1,
+                ConsumeResult::Consumed(b'0'..=b'9') => i += 1,
                 ConsumeResult::Consumed(b'.') => return Ok(self.fraction_first_digit()? + i + 1),
                 ConsumeResult::Consumed(b'e') | ConsumeResult::Consumed(b'E') => {
                     return Ok(self.exp()? + i + 1)
@@ -396,7 +396,7 @@ impl JsonDecoder {
                 bs.consume_bytes(1);
                 self.number_of_len(bytes, bs.decimal_point()? + 1)
             }
-            Some(b'1'...b'9') => {
+            Some(b'1'..=b'9') => {
                 let mut bs = bytes.clone();
                 bs.consume_bytes(1);
                 self.number_of_len(bytes, bs.int_digits()? + 1)
@@ -729,7 +729,7 @@ mod tests {
                 ConsumedValue::Value(Value::Number({
                     // I want to do: .expect("Should be able to read JSON number from string.")
                     //
-                    // But sadly... serde_json cannot handle super large number, fake a
+                    // But sadly..= serde_json cannot handle super large number, fake a
                     // different error in that case for now.
                     match Number::from_str(s) {
                         Ok(o) => o,

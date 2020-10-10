@@ -2,17 +2,14 @@ version: 2
 jobs:
   build:
     docker:
-      - image: circleci/rust:1.34.2
+      - image: cimg/rust:1.46.0
     steps:
       - restore_cache:
           name: Restoring tools cache
-          key: cargo_1_34_2
-      - run:
-          name: Install tools
-          command: rustup component add rustfmt
+          key: cargo_1_46_0
       - save_cache:
           name: Saving tools cache
-          key: "cargo_1_34_2"
+          key: "cargo_1_46_0"
           paths:
             - "~/.cargo"
       - run:
@@ -24,6 +21,9 @@ jobs:
       - run:
           name: format
           command: cargo fmt && git diff --exit-code
+      - run:
+          name: lint
+          command: cargo clippy
       - run:
           name: build
           command: cargo build
