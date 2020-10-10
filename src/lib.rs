@@ -42,7 +42,7 @@
 //! # Ok(())
 //! # }
 //! ```
-//! ## Count size of JSON array:
+//! ## Count the size of JSON array:
 //! ```
 //! # use qjsonrs::{
 //! #     sync::{

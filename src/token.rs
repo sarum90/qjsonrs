@@ -21,7 +21,7 @@ impl<'a> JsonString<'a> {
     /// Unsafely construct a JsonString from a raw str.
     ///
     /// # Safety
-    /// 
+    ///
     /// Assumes `s` is a valid JSON string (all control chars escaped, no invalid
     /// escapes, no un-escaped '"')
     pub unsafe fn from_str_unchecked(s: &'a str) -> JsonString<'a> {
