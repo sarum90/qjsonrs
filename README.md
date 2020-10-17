@@ -18,4 +18,4 @@ The steam of JsonTokens emitted by this crate unfortunately cannot quite
 provide the Iter interface. The reason is: the emitted JsonTokens refer to an
 internal buffer of the stream, and thus maintain a reference to the stream.
 
-Also, the iterator returns Results, to enable reporting of IO or JSON encoding errors.
+The iterator returns Results, to enable reporting of IO or JSON encoding errors.

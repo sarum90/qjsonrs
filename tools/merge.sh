@@ -21,14 +21,15 @@ if [[ -n $(git status -su) ]]; then
   exit -1
 fi
 
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
 git fetch
-if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) ]]; then
+if [[ $(git rev-parse HEAD) != $(git rev-parse @{u}) && $(git rev-parse HEAD) != $(git rev-parse origin/${BRANCH}) ]]; then
   error 'Current branch diverged from origin, aborting merge request.'
   git status
   exit -1
 fi
 
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [[ ${BRANCH} == "master" ]]; then
   error 'Refusing to attempt to merge master into master.'
   exit -1
