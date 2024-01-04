@@ -1,6 +1,7 @@
 //! Utilities to synchronously decode Json.
 //!
 //! For use in scenarios where it's okay to block waiting for more input while decoding.
+use std::fmt::{Display, Formatter};
 use crate::decode::{ConsumableBytes, DecodeError, JsonDecoder};
 use crate::token::{JsonString, JsonToken};
 use std::io::{Error as IoError, Read};
@@ -14,6 +15,14 @@ pub enum Error {
     /// Error that occurred during Json decoding.
     DecodeError(DecodeError),
 }
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl From<IoError> for Error {
     fn from(io: IoError) -> Error {
@@ -174,8 +183,8 @@ impl<'a, 'b> ConsumeableByteAdvance<'a, 'b> {
 }
 
 impl<R> TokenIterator for Stream<R>
-where
-    R: Read,
+    where
+        R: Read,
 {
     /// Advance to the next token.
     fn advance(&mut self) -> Result<(), Error> {
@@ -197,8 +206,8 @@ where
 }
 
 impl<R> Stream<R>
-where
-    R: Read,
+    where
+        R: Read,
 {
     /// Create a Stream from a std::io::Read.
     pub fn from_read(src: R) -> Result<Stream<R>, Error> {
