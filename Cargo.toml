@@ -1,6 +1,6 @@
 [package]
 name = "qjsonrs"
-version = "0.1.0-dev"
+version = "0.1.1-dev"
 authors = ["Marcus Ewert <marcus.ewert@mixpanel.com>"]
 license = "MIT"
 edition = "2021"
