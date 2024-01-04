@@ -1,5 +1,5 @@
 /// A raw JSON string (with escapes).
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub struct JsonString<'a> {
     raw: &'a str,
 }
@@ -148,7 +148,7 @@ impl Into<String> for JsonString<'_> {
 }
 
 /// A token from a stream of JSON.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum JsonToken<'a> {
     /// The start of an object, a.k.a. '{'
     StartObject,
