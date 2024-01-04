@@ -62,18 +62,18 @@
 //! #
 //! # use std::io::Read;
 //! #
-//! fn array_size(stream: &mut TokenIterator) -> Result<usize, JsonError> {
+//! fn array_size(stream: &mut dyn TokenIterator) -> Result<usize, JsonError> {
 //!     assert_eq!(stream.next()?.unwrap(), StartArray);
 //!     let mut size = 0;
 //!     let mut depth = 0;
 //!     loop {
 //!         match stream.next()? {
-//!             Some(StartObject) => { if depth == 0 {size += 1;} depth += 1; },
-//!             Some(EndObject) => { assert!(depth > 0); depth -= 1; },
-//!             Some(StartArray) => { if depth == 0 {size += 1;} depth += 1; },
-//!             Some(EndArray) => { if depth == 0 {break;} else { depth -= 1; } },
-//!             Some(_) => { if depth == 0 {size += 1; } },
-//!             None => { panic!("Early termination"); },
+//!             Some(StartObject) => { if depth == 0 {size += 1;} depth += 1; }
+//!             Some(EndObject) => { assert!(depth > 0); depth -= 1; }
+//!             Some(StartArray) => { if depth == 0 {size += 1;} depth += 1; }
+//!             Some(EndArray) => { if depth == 0 {break;} else { depth -= 1; } }
+//!             Some(_) => { if depth == 0 {size += 1; } }
+//!             None => { panic!("Early termination"); }
 //!         }
 //!     }
 //!     Ok(size)
@@ -85,7 +85,6 @@
 //! assert_eq!(stream.next()?, None);
 //! # Ok(())
 //! # }
-//!
 
 #[cfg(test)]
 #[macro_use]
