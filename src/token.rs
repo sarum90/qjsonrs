@@ -1,5 +1,5 @@
 /// A raw JSON string (with escapes).
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct JsonString<'a> {
     raw: &'a str,
 }
